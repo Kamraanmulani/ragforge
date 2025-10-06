@@ -1,0 +1,38 @@
+{
+  "name": "ragify",
+  "version": "1.0.0",
+  "description": "A lightweight developer toolkit that simplifies the use of advanced query translation techniques — HyDE, Chain of Thought, Step-Back Prompting, Reciprocal Rank Fusion, and Fan-Out Retrieval — for any Retrieval-Augmented Generation (RAG) system, independent of the vector database or LLM provider.",
+  "keywords": [
+    "rag",
+    "genai",
+    "retrieval-augmented-generation",
+    "hyde",
+    "chain-of-thought",
+    "step-back",
+    "rrf",
+    "fan-out",
+    "ai",
+    "query-translation"
+  ],
+  "homepage": "https://github.com/Kamraanmulani/ragify#readme",
+  "bugs": {
+    "url": "https://github.com/Kamraanmulani/ragify/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kamraanmulani/ragify.git"
+  },
+  "license": "ISC",
+  "author": "kamraanmulani",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "dotenv": "^17.2.3",
+    "nodemon": "^3.1.10",
+    "openai": "^6.1.0"
+  }
+}
