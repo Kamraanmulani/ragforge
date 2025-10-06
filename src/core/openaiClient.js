@@ -33,4 +33,21 @@ async function callLLM(prompt, options = {}) {
   }
 }
 
-module.exports = { callLLM };
+/**
+ * Generate embeddings using OpenAI's embedding model
+ */
+async function getEmbedding(text, model = "text-embedding-ada-002") {
+  try {
+    const response = await openai.embeddings.create({
+      model,
+      input: text,
+    });
+
+    return response.data[0].embedding;
+  } catch (error) {
+    console.error("[ragify] Error generating embedding:", error.message);
+    throw error;
+  }
+}
+
+module.exports = { callLLM, getEmbedding };
