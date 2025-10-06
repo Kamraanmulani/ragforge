@@ -12,8 +12,6 @@ if (!OPENAI_API_KEY) {
   console.error("[ragify] Please create a .env file in the root directory with:");
   console.error("[ragify] OPENAI_API_KEY=your_api_key_here");
   process.exit(1);
-} else {
-  console.log("[ragify] ✓ OpenAI API Key loaded successfully");
 }
 
 module.exports = { OPENAI_API_KEY };
