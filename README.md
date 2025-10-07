@@ -1460,12 +1460,6 @@ Planned features for future releases:
 
 ragify is built on the shoulders of giants:
 
-- **Research Papers**:
-  - [HyDE: Precise Zero-Shot Dense Retrieval without Relevance Labels](https://arxiv.org/abs/2212.10496)
-  - [Chain-of-Thought Prompting Elicits Reasoning in Large Language Models](https://arxiv.org/abs/2201.11903)
-  - [Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models](https://arxiv.org/abs/2310.06117)
-  - [Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
-
 - **Technologies**:
   - [OpenAI API](https://openai.com) - LLM provider
   - [Qdrant](https://qdrant.tech) - Vector database
@@ -1474,18 +1468,6 @@ ragify is built on the shoulders of giants:
 - **Community**:
   - Built with ❤️ for the RAG and AI community
   - Inspired by feedback from developers worldwide
-
----
-
-## 📄 License
-
-This project is licensed under the **ISC License** - see the [LICENSE](LICENSE) file for details.
-
-**Summary:**
-- ✅ Commercial use
-- ✅ Modification
-- ✅ Distribution
-- ✅ Private use
 
 ---
 
@@ -1502,7 +1484,6 @@ This project is licensed under the **ISC License** - see the [LICENSE](LICENSE) 
 - 📖 **Documentation**: You're reading it!
 - 🐛 **Issues**: [GitHub Issues](https://github.com/Kamraanmulani/ragify/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/Kamraanmulani/ragify/discussions)
-- 📦 **NPM**: [ragify on npm](https://www.npmjs.com/package/ragify)
 
 ### Support the Project
 
