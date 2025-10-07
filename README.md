@@ -91,17 +91,6 @@ npm install ragify
 - An LLM API key (OpenAI, Anthropic, etc.)
 - Vector database (optional but recommended)
 
-**Quick Install with Dependencies:**
-
-```bash
-# Install ragify with Qdrant (recommended vector DB)
-npm install ragify @qdrant/js-client-rest
-
-# Or with other vector databases
-npm install ragify pinecone-client  # For Pinecone
-npm install ragify weaviate-client  # For Weaviate
-```
-
 ---
 
 ## 🚀 Quick Start
