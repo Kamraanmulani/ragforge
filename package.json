@@ -1,6 +1,6 @@
 {
-  "name": "ragify",
-  "version": "1.0.0",
+  "name": "ragforge",
+  "version": "1.0.1",
   "description": "A lightweight developer toolkit that simplifies the use of advanced query translation techniques — HyDE, Chain of Thought, Step-Back Prompting, Reciprocal Rank Fusion, and Fan-Out Retrieval — for any Retrieval-Augmented Generation (RAG) system, independent of the vector database or LLM provider.",
   "keywords": [
     "rag",
@@ -14,13 +14,13 @@
     "ai",
     "query-translation"
   ],
-  "homepage": "https://github.com/Kamraanmulani/ragify#readme",
+  "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
-    "url": "https://github.com/Kamraanmulani/ragify/issues"
+    "url": "https://github.com/Kamraanmulani/ragforge/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Kamraanmulani/ragify.git"
+    "url": "git+https://github.com/Kamraanmulani/ragforge.git"
   },
   "license": "ISC",
   "author": "kamraanmulani",

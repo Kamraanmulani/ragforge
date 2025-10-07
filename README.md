@@ -1,15 +1,15 @@
 <div align="center">
 
-# 🚀 ragify
+# 🚀 ragforge
 
 ### Advanced RAG Techniques Made Simple
 
 **A lightweight, developer-friendly toolkit that brings cutting-edge query translation techniques to your Retrieval-Augmented Generation (RAG) pipeline with minimal code.**
 
-[![npm version](https://img.shields.io/npm/v/ragify?color=blue&logo=npm)](https://www.npmjs.com/package/ragify)
+[![npm version](https://img.shields.io/npm/v/ragforge?color=blue&logo=npm)](https://www.npmjs.com/package/ragforge)
 [![License: ISC](https://img.shields.io/badge/License-ISC-green.svg)](https://opensource.org/licenses/ISC)
-[![Node Version](https://img.shields.io/node/v/ragify)](https://nodejs.org)
-[![GitHub Stars](https://img.shields.io/github/stars/Kamraanmulani/ragify?style=social)](https://github.com/Kamraanmulani/ragify)
+[![Node Version](https://img.shields.io/node/v/ragforge)](https://nodejs.org)
+[![GitHub Stars](https://img.shields.io/github/stars/Kamraanmulani/ragforge?style=social)](https://github.com/Kamraanmulani/ragforge)
 
 [Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Examples](#-examples)
 
@@ -17,9 +17,9 @@
 
 </div>
 
-## 🎯 What is ragify?
+## 🎯 What is ragforge?
 
-**ragify** is a lightweight npm package that simplifies the implementation of advanced RAG query translation techniques. Stop writing complex prompts from scratch—use production-ready implementations of:
+**ragforge** is a lightweight npm package that simplifies the implementation of advanced RAG query translation techniques. Stop writing complex prompts from scratch—use production-ready implementations of:
 
 - 🔮 **HyDE** (Hypothetical Document Embeddings)
 - 🧠 **Chain of Thought** (CoT)
@@ -83,7 +83,7 @@ Building RAG systems with advanced techniques is **hard**:
 ## 📦 Installation
 
 ```bash
-npm install ragify
+npm install ragforge
 ```
 
 **Requirements:**
@@ -106,7 +106,7 @@ OPENAI_API_KEY=your_openai_api_key_here
 ### Step 2: Basic Usage (Without Vector Database)
 
 ```javascript
-const { hyde, cot, stepback } = require('ragify');
+const { hyde, cot, stepback } = require('ragforge');
 
 // Use HyDE for better query understanding
 const answer = await hyde("What are the benefits of machine learning?");
@@ -124,9 +124,9 @@ console.log(abstract.abstractQuery); // "What are European capitals and their si
 ### Step 3: Advanced Usage (With Vector Database)
 
 ```javascript
-const { hyde, setVectorClient } = require('ragify');
+const { hyde, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragify/src/core/openaiClient');
+const { getEmbedding } = require('ragforge/src/core/openaiClient');
 
 // Initialize your vector database
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
@@ -156,7 +156,7 @@ console.log(answer);
 ### Step 4: Complete RAG Pipeline
 
 ```javascript
-const { ragPipeline, setVectorClient } = require('ragify');
+const { ragPipeline, setVectorClient } = require('ragforge');
 
 // After setting up vector client (see Step 3)...
 
@@ -188,7 +188,7 @@ Traditional RAG directly embeds user queries, which can miss relevant documents.
 
 ### 2. Vector Client Abstraction
 
-ragify doesn't force you to use a specific database. You provide a simple adapter:
+ragforge doesn't force you to use a specific database. You provide a simple adapter:
 
 ```javascript
 setVectorClient({
@@ -222,7 +222,7 @@ const result = await ragPipeline(query, {
 **Why it works:** Answers are semantically closer to documents in your knowledge base than questions are.
 
 ```javascript
-const { hyde } = require('ragify');
+const { hyde } = require('ragforge');
 
 const answer = await hyde("What are neural networks?");
 console.log(answer);
@@ -249,7 +249,7 @@ console.log(answer);
 **Why it works:** Step-by-step thinking helps identify what information is actually needed.
 
 ```javascript
-const { cot } = require('ragify');
+const { cot } = require('ragforge');
 
 const result = await cot("How does photosynthesis affect climate?");
 
@@ -280,7 +280,7 @@ console.log('Refined Query:', result.refinedQuery);
 **Why it works:** Abstract concepts often provide better foundation for answering specific questions.
 
 ```javascript
-const { stepback } = require('ragify');
+const { stepback } = require('ragforge');
 
 const result = await stepback("What is the capital of France?");
 
@@ -313,7 +313,7 @@ console.log('Reasoning:', result.reasoning);
 **Why it works:** Different search methods find different relevant documents. RRF combines their strengths.
 
 ```javascript
-const { rrf } = require('ragify');
+const { rrf } = require('ragforge');
 
 // Define multiple search strategies
 const searchResults = rrf([
@@ -350,7 +350,7 @@ Where:
 **Why it works:** Different phrasings retrieve different relevant documents, giving broader coverage.
 
 ```javascript
-const { fanout } = require('ragify');
+const { fanout } = require('ragforge');
 
 const answer = await fanout("What is artificial intelligence?");
 console.log(answer);
@@ -380,7 +380,7 @@ console.log(answer);
 **Why it works:** Combines the strengths of multiple techniques for optimal retrieval and generation.
 
 ```javascript
-const { ragPipeline, setVectorClient } = require('ragify');
+const { ragPipeline, setVectorClient } = require('ragforge');
 
 // After setting up your vector client...
 
@@ -712,7 +712,7 @@ console.log('Translation:', result.translation);
 Generate embeddings using OpenAI's API.
 
 ```javascript
-const { getEmbedding } = require('ragify/src/core/openaiClient');
+const { getEmbedding } = require('ragforge/src/core/openaiClient');
 
 const vector = await getEmbedding("Your text here");
 console.log(vector.length); // 1536 (for text-embedding-ada-002)
@@ -723,7 +723,7 @@ console.log(vector.length); // 1536 (for text-embedding-ada-002)
 Call the LLM with custom prompts.
 
 ```javascript
-const { callLLM } = require('ragify/src/core/openaiClient');
+const { callLLM } = require('ragforge/src/core/openaiClient');
 
 const response = await callLLM("Explain quantum physics", {
   model: "gpt-4",
@@ -741,7 +741,7 @@ const response = await callLLM("Explain quantum physics", {
 Perfect for getting started without setting up a vector database.
 
 ```javascript
-const { hyde } = require('ragify');
+const { hyde } = require('ragforge');
 
 (async () => {
   const answer = await hyde("What are the benefits of exercise?");
@@ -769,9 +769,9 @@ Regular exercise provides numerous health benefits including improved cardiovasc
 Complete setup with a real vector database for production use.
 
 ```javascript
-const { hyde, setVectorClient } = require('ragify');
+const { hyde, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragify/src/core/openaiClient');
+const { getEmbedding } = require('ragforge/src/core/openaiClient');
 
 // 1. Initialize Qdrant client
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
@@ -808,7 +808,7 @@ setVectorClient({
 Compare different RAG techniques side-by-side.
 
 ```javascript
-const { hyde, cot, stepback, fanout } = require('ragify');
+const { hyde, cot, stepback, fanout } = require('ragforge');
 
 async function compareTechniques(query) {
   console.log('Query:', query);
@@ -846,7 +846,7 @@ compareTechniques("How does photosynthesis work?");
 Production-ready pipeline with multiple techniques.
 
 ```javascript
-const { ragPipeline, setVectorClient } = require('ragify');
+const { ragPipeline, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
 
 // Setup (same as Example 2)
@@ -905,9 +905,9 @@ setVectorClient({
 Merge results from multiple search strategies.
 
 ```javascript
-const { rrf, setVectorClient } = require('ragify');
+const { rrf, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragify/src/core/openaiClient');
+const { getEmbedding } = require('ragforge/src/core/openaiClient');
 
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
 
@@ -957,7 +957,7 @@ Setup a vector database with sample data.
 
 ```javascript
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragify/src/core/openaiClient');
+const { getEmbedding } = require('ragforge/src/core/openaiClient');
 
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
 const COLLECTION_NAME = 'my_docs';
@@ -1021,7 +1021,7 @@ setupKnowledgeBase();
 Use different models and parameters for different use cases.
 
 ```javascript
-const { hyde, cot } = require('ragify');
+const { hyde, cot } = require('ragforge');
 
 // Fast, cheap responses
 const quickAnswer = await hyde("What is AI?", {
@@ -1089,7 +1089,7 @@ OPENAI_ORGANIZATION=org-your-org-id        # Organization ID
 
 ### Default Settings
 
-ragify uses sensible defaults that work for most use cases. You can find them in `src/config/defaults.js`:
+ragforge uses sensible defaults that work for most use cases. You can find them in `src/config/defaults.js`:
 
 ```javascript
 {
@@ -1203,7 +1203,7 @@ docker-compose up -d
 
 ## 🧪 Testing
 
-ragify includes comprehensive test coverage for all techniques.
+ragforge includes comprehensive test coverage for all techniques.
 
 ### Run Tests
 
@@ -1232,7 +1232,7 @@ npm test hyde.test.js
 ### Writing Your Own Tests
 
 ```javascript
-const { hyde } = require('ragify');
+const { hyde } = require('ragforge');
 
 describe('HyDE Tests', () => {
   it('should generate hypothetical document', async () => {
@@ -1249,7 +1249,7 @@ describe('HyDE Tests', () => {
 ## 📁 Project Structure
 
 ```
-ragify/
+ragforge/
 ├── src/
 │   ├── core/
 │   │   ├── openaiClient.js      # LLM API integration (OpenAI)
@@ -1297,13 +1297,13 @@ ragify/
 
 ## ❓ FAQ
 
-### Q: Do I need a vector database to use ragify?
+### Q: Do I need a vector database to use ragforge?
 
-**A:** No! ragify works without a vector database. Techniques like HyDE will generate hypothetical documents and return them directly. However, for production RAG systems, a vector database is highly recommended for better retrieval.
+**A:** No! ragforge works without a vector database. Techniques like HyDE will generate hypothetical documents and return them directly. However, for production RAG systems, a vector database is highly recommended for better retrieval.
 
-### Q: Can I use ragify with other LLM providers?
+### Q: Can I use ragforge with other LLM providers?
 
-**A:** Currently, ragify uses OpenAI's API. However, you can easily extend `src/core/openaiClient.js` to work with:
+**A:** Currently, ragforge uses OpenAI's API. However, you can easily extend `src/core/openaiClient.js` to work with:
 - Anthropic Claude
 - Google Gemini
 - Azure OpenAI
@@ -1328,9 +1328,9 @@ ragify/
 
 Typical costs: ~$0.01-0.05 per query depending on configuration.
 
-### Q: Can I use ragify in production?
+### Q: Can I use ragforge in production?
 
-**A:** Yes! ragify is designed for production use:
+**A:** Yes! ragforge is designed for production use:
 - ✅ Comprehensive error handling
 - ✅ Configurable timeouts and retries
 - ✅ Extensive test coverage
@@ -1360,11 +1360,11 @@ setVectorClient({
 
 ### Q: Can I customize the prompts?
 
-**A:** Yes! You can modify prompts in the technique files (`src/techniques/`) or create your own implementations inspired by ragify's architecture.
+**A:** Yes! You can modify prompts in the technique files (`src/techniques/`) or create your own implementations inspired by ragforge's architecture.
 
-### Q: Does ragify support streaming responses?
+### Q: Does ragforge support streaming responses?
 
-**A:** Not currently, but it's on the roadmap. Follow the [GitHub repo](https://github.com/Kamraanmulani/ragify) for updates.
+**A:** Not currently, but it's on the roadmap. Follow the [GitHub repo](https://github.com/Kamraanmulani/ragforge) for updates.
 
 ### Q: How do I contribute?
 
@@ -1388,8 +1388,8 @@ Contributions are welcome and appreciated! Here's how you can help:
 
 1. **Fork and clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/ragify.git
-   cd ragify
+   git clone https://github.com/YOUR_USERNAME/ragforge.git
+   cd ragforge
    ```
 
 2. **Install dependencies**
@@ -1447,7 +1447,7 @@ Planned features for future releases:
 
 ## 🌟 Acknowledgments
 
-ragify is built on the shoulders of giants:
+ragforge is built on the shoulders of giants:
 
 - **Technologies**:
   - [OpenAI API](https://openai.com) - LLM provider
@@ -1466,31 +1466,31 @@ ragify is built on the shoulders of giants:
 
 **Kamraan Mulani**
 - GitHub: [@Kamraanmulani](https://github.com/Kamraanmulani)
-- Project: [ragify](https://github.com/Kamraanmulani/ragify)
+- Project: [ragforge](https://github.com/Kamraanmulani/ragforge)
 
 ### Get Help
 
 - 📖 **Documentation**: You're reading it!
-- 🐛 **Issues**: [GitHub Issues](https://github.com/Kamraanmulani/ragify/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/Kamraanmulani/ragify/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/Kamraanmulani/ragforge/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/Kamraanmulani/ragforge/discussions)
 
 ### Support the Project
 
-If you find ragify helpful:
+If you find ragforge helpful:
 
-- ⭐ **Star the repo** on [GitHub](https://github.com/Kamraanmulani/ragify)
+- ⭐ **Star the repo** on [GitHub](https://github.com/Kamraanmulani/ragforge)
 - 🐦 **Share it** on social media
 - 📝 **Write a blog post** about your experience
 - 🤝 **Contribute** code or documentation
-- 💬 **Provide feedback** to help improve ragify
+- 💬 **Provide feedback** to help improve ragforge
 
 ---
 
 ## � Quick Links
 
-- [📦 NPM Package](https://www.npmjs.com/package/ragify)
-- [📂 GitHub Repository](https://github.com/Kamraanmulani/ragify)
-- [🐛 Report Issues](https://github.com/Kamraanmulani/ragify/issues)
+- [📦 NPM Package](https://www.npmjs.com/package/ragforge)
+- [📂 GitHub Repository](https://github.com/Kamraanmulani/ragforge)
+- [🐛 Report Issues](https://github.com/Kamraanmulani/ragforge/issues)
 - [📖 Full Documentation](#-table-of-contents)
 - [💡 Examples](./examples/)
 
@@ -1502,10 +1502,10 @@ If you find ragify helpful:
 
 **If this project helped you, please consider giving it a ⭐!**
 
-[⬆ Back to Top](#-ragify)
+[⬆ Back to Top](#-ragforge)
 
 ---
 
-**Made with passion by [Kamraan Mulani](https://github.com/Kamraanmulani) | Licensed under ISC**
+**Made with passion by [Kamraan Mulani](https://github.com/Kamraanmulani)**
 
 </div>
