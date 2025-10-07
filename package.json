@@ -27,7 +27,8 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --verbose",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.15.1",
@@ -35,5 +36,8 @@
     "dotenv": "^17.2.3",
     "nodemon": "^3.1.10",
     "openai": "^6.1.0"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0"
   }
 }
