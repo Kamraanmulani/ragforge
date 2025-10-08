@@ -1,6 +1,6 @@
 {
   "name": "ragforge",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "A lightweight developer toolkit that simplifies the use of advanced query translation techniques — HyDE, Chain of Thought, Step-Back Prompting, Reciprocal Rank Fusion, and Fan-Out Retrieval — for any Retrieval-Augmented Generation (RAG) system, independent of the vector database or LLM provider.",
   "keywords": [
     "rag",

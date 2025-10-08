@@ -7,7 +7,7 @@
 **A lightweight, developer-friendly toolkit that brings cutting-edge query translation techniques to your Retrieval-Augmented Generation (RAG) pipeline with minimal code.**
 
 [![npm version](https://img.shields.io/npm/v/ragforge?color=blue&logo=npm)](https://www.npmjs.com/package/ragforge)
-[![License: ISC](https://img.shields.io/badge/License-ISC-green.svg)](https://opensource.org/licenses/ISC)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Node Version](https://img.shields.io/node/v/ragforge)](https://nodejs.org)
 [![GitHub Stars](https://img.shields.io/github/stars/Kamraanmulani/ragforge?style=social)](https://github.com/Kamraanmulani/ragforge)
 
