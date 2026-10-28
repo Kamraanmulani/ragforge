@@ -62,7 +62,8 @@ Note: the result keeps the pipeline shape and adds `route`, rather than spreadin
 | `assets/logo.svg` (light/dark) and `assets/eval-demo.svg` (terminal hero mirroring real CLI output) | Done |
 | `CHANGELOG.md` with 2.0 migration notes, shipped in the package | Done |
 | GitHub Actions CI (Node 18/20/22: tests, typecheck, CLI smoke, pack) + `npm run typecheck` | Done |
-| One real eval run (OpenAI or Ollama); replace the example numbers in `eval-demo.svg` with real ones | To do |
+| Real eval run (OpenAI, 12 npm package READMEs, 437 chunks, 30 queries, $0.033): baseline 77% / MRR 0.672 matched or beat every technique; HyDE 67% at ~350× the cost. `eval-demo.svg` shows this run | Done |
+| Fixed from the real run: unanswerable generated questions ("the tool mentioned in the text"), single question style, colliding ids for same-named docs | Done |
 | Release (steps below) | To do |
 | Blog post: "I benchmarked 5 RAG query techniques so you don't have to" | To do |
 | Post to r/LocalLLaMA, r/node, Show HN, dev.to, LinkedIn | To do |

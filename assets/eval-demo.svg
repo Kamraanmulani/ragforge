@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" role="img" aria-label="Example output of npx ragforge eval: a scoreboard of retrieval techniques with a recommendation">
-  <title>npx ragforge eval (example output)</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" role="img" aria-label="Real output of npx ragforge eval on 12 npm package READMEs: plain search matched or beat every query technique">
+  <title>npx ragforge eval (real run on 12 npm package READMEs)</title>
   <style>
     text { font: 13.5px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: #c9d1d9; white-space: pre; }
     .dim { fill: #6e7681; }
@@ -27,27 +27,27 @@
   <circle cx="66" cy="23" r="6" fill="#28c840"/>
   <text x="450" y="27.5" text-anchor="middle" class="dim">ragforge eval</text>
 
-  <text x="28" y="78"><tspan class="prompt">$</tspan> <tspan class="cmd">npx ragforge eval --docs ./docs --questions 20 --techniques baseline,hyde,stepback,fanout,hyde+stepback</tspan></text>
-  <text x="28" y="106" class="dim">Evaluating 14 document(s) with openai...</text>
-  <text x="28" y="126" class="dim">Indexing chunks: 212/212</text>
-  <text x="28" y="146" class="dim">Generating questions: 20/20</text>
-  <text x="28" y="166" class="dim">Running techniques: 100/100</text>
+  <text x="28" y="78"><tspan class="prompt">$</tspan> <tspan class="cmd">npx ragforge eval --docs ./readmes --questions 30 --techniques baseline,hyde,stepback,fanout,hyde+stepback</tspan></text>
+  <text x="28" y="106" class="dim">Evaluating 12 document(s) with openai...</text>
+  <text x="28" y="126" class="dim">Indexing chunks: 437/437</text>
+  <text x="28" y="146" class="dim">Generating questions: 30/30</text>
+  <text x="28" y="166" class="dim">Running techniques: 150/150</text>
 
-  <text x="28" y="202" class="accent">ragforge eval · 20 questions · top 5 · openai gpt-4o-mini / text-embedding-ada-002</text>
+  <text x="28" y="202" class="accent">ragforge eval · 30 questions · top 5 · openai gpt-4o-mini / text-embedding-ada-002</text>
 
-  <text x="28" y="234" class="head">technique         hit@5   MRR     latency   cost/query   LLM calls   errors</text>
-  <text x="28" y="254" class="dim">---------------   -----   -----   -------   ----------   ---------   ------</text>
+  <text x="28" y="234" class="head">technique       hit@5   MRR     latency   cost/query   LLM calls   errors</text>
+  <text x="28" y="254" class="dim">-------------   -----   -----   -------   ----------   ---------   ------</text>
   <!-- Name and values drawn separately so the wide ★ glyph can't shift the columns -->
-  <text x="28" y="278"><tspan class="best">hyde+stepback</tspan> <tspan class="star">★</tspan></text>
-  <text x="28" y="278">                  <tspan class="good">87%</tspan>     0.741   3.1s      $0.000210    2</text>
-  <text x="28" y="300">hyde              83%     0.702   2.9s      $0.000190    1</text>
-  <text x="28" y="322">stepback          77%     0.655   0.9s      $0.000020    1</text>
-  <text x="28" y="344">fanout            73%     0.611   1.4s      $0.000050    1</text>
-  <text x="28" y="366">baseline          70%     0.588   180ms     &lt;$0.000001   0</text>
+  <text x="28" y="278"><tspan class="best">baseline</tspan> <tspan class="star">★</tspan></text>
+  <text x="28" y="278">                <tspan class="good">77%</tspan>     <tspan class="good">0.672</tspan>   <tspan class="good">407ms</tspan>     <tspan class="good">$0.000001</tspan>    0</text>
+  <text x="28" y="300">stepback        77%     0.569   2.1s      $0.000021    1</text>
+  <text x="28" y="322">fanout          77%     0.555   2.2s      $0.000049    1</text>
+  <text x="28" y="344">hyde+stepback   77%     0.539   6.6s      $0.000374    2</text>
+  <text x="28" y="366">hyde            67%     0.528   6.7s      $0.000352    1</text>
 
-  <text x="28" y="402"><tspan class="star">★</tspan> <tspan class="best">Recommended: hyde+stepback</tspan></text>
-  <text x="28" y="422">  hyde+stepback found the right chunk 87% of the time vs 70% for plain search (+17 points).</text>
-  <text x="28" y="442" class="dim">Setup: 212 chunks indexed, 20 questions, setup cost $0.001900</text>
+  <text x="28" y="402"><tspan class="star">★</tspan> <tspan class="best">Recommended: baseline</tspan></text>
+  <text x="28" y="422">  Plain embedding search had the best hit@5 (77%); query techniques didn't help on this data.</text>
+  <text x="28" y="442" class="dim">Setup: 437 chunks indexed, 30 questions, setup cost $0.009390</text>
 
   <text x="28" y="474"><tspan class="prompt">$</tspan> <tspan class="cmd">▍</tspan></text>
 </svg>

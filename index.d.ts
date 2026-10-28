@@ -156,6 +156,8 @@ export interface EvaluateOptions {
   /** Ground-truth questions. Generated from the documents when omitted. */
   questions?: EvalQuestion[];
   numQuestions?: number;
+  /** Mix of generated question styles (default all three, cycled) */
+  questionStyles?: Array<"question" | "keywords" | "conceptual">;
   /** e.g. ["baseline", "hyde", "hyde+stepback"] */
   techniques?: EvalTechnique[];
   topK?: number;
@@ -198,7 +200,7 @@ export interface EvalResult {
   ranking: string[];
   best: string;
   recommendation: { technique: string; reason: string };
-  questions: Array<EvalQuestion & { source?: string; runs: Record<string, EvalRun> }>;
+  questions: Array<EvalQuestion & { source?: string; style?: "question" | "keywords" | "conceptual"; runs: Record<string, EvalRun> }>;
 }
 
 export interface MemoryVectorStore extends VectorStore {

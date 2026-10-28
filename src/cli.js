@@ -17,6 +17,7 @@ Options:
   --docs <path>             File or folder of .txt/.md/.mdx/.rst files (repeatable)
   --questions <n>           Questions to generate from the docs (default 10)
   --questions-file <file>   JSON array of { question, expectedText } to use instead
+  --question-styles <list>  Generated mix (default question,keywords,conceptual)
   --techniques <list>       Comma-separated (default ${DEFAULT_TECHNIQUES.join(",")})
                             Available: baseline, hyde, cot, stepback, fanout; combine with +
   --provider <name>         openai (default) or ollama
@@ -103,6 +104,7 @@ async function main(argv, io = {}) {
         docs: { type: "string", multiple: true },
         questions: { type: "string" },
         "questions-file": { type: "string" },
+        "question-styles": { type: "string" },
         techniques: { type: "string" },
         provider: { type: "string", default: "openai" },
         embeddings: { type: "string" },
@@ -159,6 +161,7 @@ async function main(argv, io = {}) {
       questions,
       techniques,
       numQuestions: toInt(values.questions, "questions"),
+      questionStyles: values["question-styles"] ? values["question-styles"].split(",").map((s) => s.trim()).filter(Boolean) : undefined,
       topK: toInt(values["top-k"], "top-k"),
       chunkSize: toInt(values["chunk-size"], "chunk-size"),
       concurrency: toInt(values.concurrency, "concurrency"),

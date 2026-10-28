@@ -8,7 +8,7 @@ ragforge 2 adds tools that tell you which query technique works on your data, an
 
 ### Added
 
-- **`npx ragforge eval`** and **`rf.evaluate()`**. Benchmarks techniques on your documents. It generates test questions from your chunks, runs every technique, and reports hit@k, MRR, latency, cost and LLM calls. It recommends a technique, or plain search when no technique beats it by 5 points. Supports combined techniques (`hyde+stepback`), your own questions (`--questions-file`), your existing vector store, and HTML and JSON reports.
+- **`npx ragforge eval`** and **`rf.evaluate()`**. Benchmarks techniques on your documents. It generates test questions from your chunks, runs every technique, and reports hit@k, MRR, latency, cost and LLM calls. Generated test queries mix full questions, keyword searches and vague why/how questions, and queries that only make sense next to their passage are replaced. It recommends a technique, or plain search when no technique beats it by 5 points. Supports combined techniques (`hyde+stepback`), your own questions (`--questions-file`), your existing vector store, and HTML and JSON reports.
 - **`rf.auto()`** and **`rf.route()`**. Picks a technique per query, using built-in rules, a small LLM classifier (`router: 'llm'`), or the per-category winners from an eval result (`from: evalResult`). Every result explains its choice in `route.reason`.
 - **`createRagforge(options)`**. Configured instances with no global state.
 - **Providers.** OpenAI and Ollama (local, free) built in; any object with `chat` and `embed` works. Chat and embedding providers can be mixed.

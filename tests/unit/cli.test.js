@@ -8,7 +8,7 @@ const { createRagforge } = require('../../index');
 const { createKeywordProvider } = require('./helpers');
 
 function respond(prompt) {
-  if (prompt.startsWith('Write one question')) return prompt.split('Passage:\n')[1].split('.')[0] + '?';
+  if (prompt.includes('Passage:\n')) return prompt.split('Passage:\n')[1].split('.')[0] + '?';
   return 'unrelated words';
 }
 

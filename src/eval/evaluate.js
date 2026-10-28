@@ -48,29 +48,68 @@ function cleanQuestion(text) {
     .trim();
 }
 
-/**
- * generateQuestions
- * Picks chunks spread evenly across the corpus and asks the LLM for a question
- * each chunk answers. That chunk becomes the ground truth for the question.
- */
-async function generateQuestions(ctx, chunks, count, llmOptions, concurrency, onProgress = () => {}) {
-  const substantial = chunks.filter((c) => c.content.length >= 150);
-  const pool = substantial.length >= count ? substantial : chunks;
-  const n = Math.min(count, pool.length);
-  const picked = Array.from({ length: n }, (_, i) => pool[Math.floor((i * pool.length) / n)]);
-  let done = 0;
+// Real users don't only ask tidy questions; a mix keeps the eval from favouring
+// plain search and gives the router data for its short/conceptual categories
+const QUESTION_STYLES = {
+  question: "Write one question a user might ask that this passage answers. Do not copy the passage's wording.",
+  keywords: "Write the short search query (2 to 5 words, no question mark) a user would type into a documentation search box to find this passage. Do not copy a full phrase from the passage.",
+  conceptual: "Write one why or how question about the idea behind this passage, phrased the way someone who doesn't know the exact terms would ask it.",
+};
+const DEFAULT_QUESTION_STYLES = ["question", "keywords", "conceptual"];
 
-  return mapLimit(picked, concurrency, async (chunk) => {
-    const prompt = `Write one question a user might ask that is answered by the passage below.
-The question must be answerable from the passage alone, must not copy its wording verbatim, and must not mention "the passage" or "the text".
-Return only the question.
+// Questions that point at the passage instead of naming their subject can't be answered by search
+const VAGUE_REFERENCE = /\b(the|this) (text|passage|excerpt|snippet|article|section)\b|\bthis (tool|library|package|function|method|module|content|document)\b|\b(described|mentioned)\b|\bprovided (text|content|passage|documentation)\b/i;
+
+function questionPrompt(style, chunk) {
+  return `The passage below is from "${chunk.docId}".
+${QUESTION_STYLES[style]}
+It must make sense on its own to someone who hasn't seen the passage: name the specific library, function, option or concept, and never refer to "the passage", "the text" or "the described function".
+Return only the ${style === "keywords" ? "query" : "question"}.
 
 Passage:
 ${chunk.content}`;
-    const question = cleanQuestion(await ctx.chat(prompt, { temperature: 0.3, max_tokens: 100, ...llmOptions }));
+}
+
+/**
+ * generateQuestions
+ * Picks chunks spread evenly across the corpus and asks the LLM for a question
+ * each chunk answers, cycling through question styles. That chunk becomes the
+ * ground truth. Vague questions are retried on another chunk (up to 3 tries).
+ */
+async function generateQuestions(ctx, chunks, count, llmOptions, concurrency, onProgress = () => {}, styles = DEFAULT_QUESTION_STYLES) {
+  const substantial = chunks.filter((c) => c.content.length >= 150);
+  const pool = substantial.length >= count ? substantial : chunks;
+  const n = Math.min(count, pool.length);
+  const pickedIdx = Array.from({ length: n }, (_, i) => Math.floor((i * pool.length) / n));
+  const picked = new Set(pickedIdx);
+  // Spare chunks for retries, in a deterministic scattered order
+  const spares = pool.filter((_, i) => !picked.has(i)).sort((a, b) => (hash(a.id) % 9973) - (hash(b.id) % 9973));
+  let done = 0;
+
+  const results = await mapLimit(pickedIdx, concurrency, async (poolIndex, slot) => {
+    const style = styles[slot % styles.length];
+    let chunk = pool[poolIndex];
+    for (let attempt = 0; attempt < 3 && chunk; attempt++) {
+      const question = cleanQuestion(await ctx.chat(questionPrompt(style, chunk), { temperature: 0.3, max_tokens: 100, ...llmOptions }));
+      if (question && !VAGUE_REFERENCE.test(question)) {
+        onProgress({ phase: "questions", done: ++done, total: n });
+        return { question, style, expectedId: chunk.id, source: chunk.content };
+      }
+      chunk = spares.shift();
+    }
     onProgress({ phase: "questions", done: ++done, total: n });
-    return { question, expectedId: chunk.id, source: chunk.content };
+    return null;
   });
+
+  const questions = results.filter(Boolean);
+  if (!questions.length) throw new Error("[ragforge] evaluate: could not generate usable questions from the documents");
+  return questions;
+}
+
+function hash(text) {
+  let h = 0;
+  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h;
 }
 
 function resultKey(item) {
@@ -146,6 +185,7 @@ function recommend(ranked, topK, minImprovement) {
  * @param {Array<string|{id?, content}>} [options.documents] - Corpus to index in memory
  * @param {Array<{question, expectedId?, expectedText?}>} [options.questions] - Ground-truth questions
  * @param {number} [options.numQuestions=10] - Questions to generate when none are given
+ * @param {string[]} [options.questionStyles] - Generated question mix: question, keywords, conceptual
  * @param {string[]} [options.techniques] - e.g. ["baseline", "hyde", "hyde+stepback"]
  * @param {number} [options.topK=5]
  * @param {number} [options.chunkSize=800]
@@ -158,6 +198,7 @@ async function evaluate(config, options = {}) {
   const {
     documents,
     numQuestions = 10,
+    questionStyles = DEFAULT_QUESTION_STYLES,
     techniques = DEFAULT_TECHNIQUES,
     topK = 5,
     chunkSize = 800,
@@ -169,6 +210,9 @@ async function evaluate(config, options = {}) {
 
   // Validate everything before spending any API calls
   techniques.forEach(parseTechnique);
+  if (!questionStyles.length || questionStyles.some((s) => !QUESTION_STYLES[s])) {
+    throw new Error(`[ragforge] evaluate: questionStyles must be some of ${Object.keys(QUESTION_STYLES).join(", ")}`);
+  }
   const hasDocuments = Boolean(documents && documents.length);
   if (!hasDocuments && !config.vectorStore) {
     throw new Error("[ragforge] evaluate needs `documents`, or a vectorStore on the instance plus `questions`");
@@ -209,7 +253,7 @@ async function evaluate(config, options = {}) {
   if (givenQuestions) {
     questions = givenQuestions.map((q) => ({ ...q }));
   } else {
-    questions = await generateQuestions(setupCtx, chunks, numQuestions, llmOptions, concurrency, onProgress);
+    questions = await generateQuestions(setupCtx, chunks, numQuestions, llmOptions, concurrency, onProgress, questionStyles);
   }
 
   // 3. Run every technique on every question
@@ -273,4 +317,4 @@ async function evaluate(config, options = {}) {
   };
 }
 
-module.exports = { evaluate, DEFAULT_TECHNIQUES, parseTechnique, generateQuestions };
+module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, generateQuestions };

@@ -29,7 +29,7 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 <div align="center">
 <img src="https://raw.githubusercontent.com/Kamraanmulani/ragforge/main/assets/eval-demo.svg" alt="npx ragforge eval prints a scoreboard of techniques and recommends one" width="860">
 <br>
-<sub>Example output. Your numbers depend on your documents, which is the point.</sub>
+<sub>A real run on 12 popular npm package READMEs (30 queries, gpt-4o-mini, total cost 3 cents). On these docs, plain search matched or beat every technique, and HyDE cost 350× more per query while finding the right chunk less often. Your data may say otherwise. That's why you measure.</sub>
 </div>
 
 <br>
@@ -106,7 +106,7 @@ npx ragforge eval --docs ./docs
 ```
 
 1. **Index.** Reads `.txt`, `.md`, `.mdx` and `.rst` files, splits them into chunks and embeds them into an in-memory store.
-2. **Generate questions.** The LLM writes a question for chunks spread across your documents. The chunk it came from is the right answer.
+2. **Generate questions.** The LLM writes a test query for chunks spread across your documents, mixing three styles real users have: full questions, short keyword searches and vague *why/how* questions. The chunk it came from is the right answer. Queries that only make sense next to the passage ("the function described…") are thrown out and replaced.
 3. **Run.** Every technique runs on every question, and ragforge checks whether it retrieved that chunk in the top *k*.
 4. **Score and recommend.** You get hit@k, MRR, latency, cost per query and LLM calls for each technique. A technique has to beat plain search by **5 points** to be recommended.
 
@@ -115,6 +115,7 @@ npx ragforge eval --docs ./docs
 | `--docs <path>` | | File or folder, repeatable |
 | `--questions <n>` | `10` | Questions to generate |
 | `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]` |
+| `--question-styles <list>` | `question,keywords,conceptual` | Which generated query styles to mix |
 | `--techniques <list>` | `baseline,hyde,stepback,fanout` | Also `cot`; combine with `+`, e.g. `hyde+stepback` |
 | `--provider <name>` | `openai` | `openai` or `ollama` |
 | `--embeddings <name>` | same as provider | Mix providers |
@@ -360,7 +361,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 
 **Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `techniques`, `topK` (5), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
 
 </details>
 

@@ -12,7 +12,7 @@ const DOCS = [
 // Generated question = the passage's first sentence, so plain search can find it.
 // HyDE always "hallucinates" about rockets, so it only helps the rocket question.
 function respond(prompt) {
-  if (prompt.startsWith('Write one question')) {
+  if (prompt.includes('Passage:\n')) {
     const passage = prompt.split('Passage:\n')[1];
     return `Question: ${passage.split('.')[0]}?`;
   }
@@ -38,6 +38,20 @@ describe('chunkText', () => {
   test('hard-splits text with no sentence breaks', () => {
     const chunks = chunkText('x'.repeat(50), { size: 20 });
     expect(chunks.map((c) => c.length)).toEqual([20, 20, 10]);
+  });
+});
+
+describe('chunkDocuments', () => {
+  const { chunkDocuments } = require('../../src/eval/chunk');
+
+  test('makes repeated document ids unique', () => {
+    const chunks = chunkDocuments([
+      { id: 'README.md', content: 'first' },
+      { id: 'README.md', content: 'second' },
+      'third',
+    ]);
+
+    expect(chunks.map((c) => c.id)).toEqual(['README.md#1', 'README.md~2#1', 'doc3#1']);
   });
 });
 
@@ -71,6 +85,40 @@ describe('evaluate', () => {
     expect(result.questions[0]).toMatchObject({ expectedId: 'cats.md#1' });
     expect(result.questions[0].question).not.toMatch(/^Question:/);
     expect(result.questions[0].runs.baseline.rank).toBe(1);
+  });
+
+  test('generated questions cycle through styles and name their source document', async () => {
+    const llm = createKeywordProvider(respond);
+    const result = await createRagforge({ llm }).evaluate({ documents: DOCS, techniques: ['baseline'], numQuestions: 3 });
+
+    expect(result.questions.map((q) => q.style)).toEqual(['question', 'keywords', 'conceptual']);
+    const prompts = llm.calls.chat.map((c) => c.prompt);
+    expect(prompts[0]).toMatch(/from "cats\.md"/);
+    expect(prompts.some((p) => p.includes('short search query'))).toBe(true);
+    expect(prompts.some((p) => p.includes('why or how question'))).toBe(true);
+  });
+
+  test('vague questions are retried on another chunk', async () => {
+    let calls = 0;
+    const llm = createKeywordProvider((p) => {
+      if (!p.includes('Passage:\n')) return 'ok';
+      calls++;
+      // First answer points at "the text" instead of naming a subject
+      return calls === 1 ? 'What is the purpose of the tool mentioned in the text?' : respond(p);
+    });
+    const result = await createRagforge({ llm }).evaluate({ documents: DOCS, techniques: ['baseline'], numQuestions: 1, questionStyles: ['question'] });
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].question).not.toMatch(/mentioned/);
+    expect(result.questions[0].expectedId).not.toBe('cats.md#1');
+    expect(calls).toBe(2);
+  });
+
+  test('fails clearly when no usable question can be generated', async () => {
+    const llm = createKeywordProvider((p) => (p.includes('Passage:\n') ? 'What does the passage describe?' : 'ok'));
+
+    await expect(createRagforge({ llm }).evaluate({ documents: DOCS, techniques: ['baseline'], numQuestions: 1 }))
+      .rejects.toThrow(/could not generate usable questions/);
   });
 
   test('setup cost covers indexing and question generation, not technique runs', async () => {
@@ -159,6 +207,7 @@ describe('evaluate', () => {
     await expect(rf.evaluate({ documents: DOCS, techniques: ['hide'] })).rejects.toThrow(/Unknown eval technique/);
     await expect(rf.evaluate({})).rejects.toThrow(/needs `documents`/);
     await expect(rf.evaluate({ documents: DOCS, questions: [{ question: 'q' }] })).rejects.toThrow(/needs `question`/);
+    await expect(rf.evaluate({ documents: DOCS, questionStyles: ['riddle'] })).rejects.toThrow(/questionStyles/);
     expect(llm.calls.embed).toHaveLength(0);
     expect(llm.calls.chat).toHaveLength(0);
   });
