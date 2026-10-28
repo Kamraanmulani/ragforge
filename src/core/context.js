@@ -18,9 +18,9 @@ function normalizeChatOptions(options, defaults, provider) {
   };
 }
 
-function createCallContext(config) {
+// Pass a tracker to accumulate several calls' usage into one total
+function createCallContext(config, tracker = createTracker(config.pricing)) {
   const { llm, embedder, cache, logger, defaults } = config;
-  const tracker = createTracker(config.pricing);
 
   async function chat(prompt, options = {}) {
     const params = { prompt, ...normalizeChatOptions(options, defaults, llm) };

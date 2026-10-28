@@ -8,7 +8,7 @@ Work happens on the `v2` branch; `main` stays on 1.x until release.
 
 ---
 
-## Phase 1: Foundation (needed by everything else)
+## Phase 1: Foundation (done)
 
 | Item | Why | Status |
 |---|---|---|
@@ -25,14 +25,21 @@ Work happens on the `v2` branch; `main` stays on 1.x until release.
 | Mocked unit tests (`npm test`), real-API tests moved to `npm run test:integration` | Runs in CI for free | Done |
 | Default chat model `gpt-4` → `gpt-4o-mini` | ~200x cheaper, faster; embedding model unchanged so existing vector collections keep working | Done |
 
-## Phase 2: `ragforge eval`
+## Phase 2: `ragforge eval` (done)
 
-- API: `rf.evaluate({ documents, questions?, techniques, topK })` → scoreboard rows `{ technique, hitAtK, mrr, avgLatencyMs, avgCostUSD }`.
-- If `questions` is omitted, generate N questions from random document chunks with the LLM; the source chunk is the ground truth.
-- Built-in in-memory vector store (cosine similarity) so eval needs no database.
-- CLI: `npx ragforge eval --docs ./docs --questions 20 [--provider ollama] [--html report.html]`.
-- Baseline (plain embedding search) always included for comparison.
-- HTML report (single file) for sharing.
+| Item | Status |
+|---|---|
+| `rf.evaluate({ documents, questions?, techniques, topK })` → rows `{ technique, hitRate, mrr, avgLatencyMs, avgCostUSD, avgLlmCalls, errors }` | Done |
+| Question generation from chunks spread evenly across the corpus; source chunk is ground truth | Done |
+| User questions with `expectedId` or `expectedText`; can run against the instance's own vector store | Done |
+| Techniques: baseline, hyde, cot, stepback, fanout, and `+` combinations fused with RRF | Done |
+| Recommendation: best technique, or baseline when the gain is under `minImprovement` (5 points) | Done |
+| In-memory cosine vector store, paragraph-aware chunker (no overlap, for fair scoring) | Done |
+| Bounded concurrency to avoid rate limits; input validated before any API calls | Done |
+| CLI `npx ragforge eval` with `--provider ollama`, `--html`, `--json`, `--questions-file` | Done |
+| Console table and self-contained HTML report (light/dark) | Done |
+
+Not yet verified against a real provider (needs an OpenAI key or a running Ollama).
 
 ## Phase 3: Auto-router
 

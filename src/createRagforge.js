@@ -12,6 +12,7 @@ const { fanout } = require("./techniques/fanout");
 const { rrf } = require("./techniques/rrf");
 const { translate } = require("./pipeline/queryTranslator");
 const { ragPipeline } = require("./pipeline/ragPipeline");
+const { evaluate } = require("./eval/evaluate");
 
 /**
  * createRagforge
@@ -59,6 +60,9 @@ function createRagforge(options = {}) {
         const result = await ragPipeline(ctx, query, opts);
         return { ...result, stats: ctx.tracker.snapshot() };
       }, opts),
+
+    // Benchmarks retrieval techniques; see src/eval/evaluate.js for options
+    evaluate: (opts = {}) => evaluate(config, opts),
 
     callLLM: (prompt, opts = {}) => run((ctx) => ctx.chat(prompt, opts), opts),
     getEmbedding: (text, opts = {}) => run((ctx) => ctx.embed(text, opts.model), opts),

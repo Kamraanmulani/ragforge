@@ -35,4 +35,38 @@ function createFakeProvider({ name = "fake", reply, delayMs = 0, free = false, c
   };
 }
 
-module.exports = { createFakeProvider };
+// Bag-of-words embedding: texts sharing words get similar vectors,
+// so retrieval quality in tests is real, not random
+function keywordVector(text, dims = 256) {
+  const v = new Array(dims).fill(0);
+  for (const word of text.toLowerCase().match(/[a-z]{3,}/g) ?? []) {
+    let h = 0;
+    for (const ch of word) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    v[h % dims] += 1;
+  }
+  return v;
+}
+
+/**
+ * createKeywordProvider
+ * chat replies come from `respond(prompt)`; embeddings use keywordVector
+ */
+function createKeywordProvider(respond) {
+  const calls = { chat: [], embed: [] };
+  return {
+    name: 'keyword',
+    chatModel: 'gpt-4o-mini',
+    embeddingModel: 'text-embedding-3-small',
+    calls,
+    async chat(params) {
+      calls.chat.push(params);
+      return { text: respond(params.prompt), model: params.model, usage: { inputTokens: 100, outputTokens: 20 } };
+    },
+    async embed({ text, model }) {
+      calls.embed.push(text);
+      return { vector: keywordVector(text), model, usage: { inputTokens: 10 } };
+    },
+  };
+}
+
+module.exports = { createFakeProvider, createKeywordProvider, keywordVector };

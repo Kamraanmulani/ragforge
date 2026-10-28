@@ -2,6 +2,14 @@
 const { extractText } = require("../core/utils");
 
 /**
+ * hypotheticalDocument
+ * The text HyDE embeds instead of the raw query
+ */
+function hypotheticalDocument(ctx, query, options = {}) {
+  return ctx.chat(`Answer this question in detail: "${query}"`, options);
+}
+
+/**
  * HyDE
  * Generates a hypothetical answer, embeds it and searches the vector store with it.
  * Without a vector store (or with no results) the hypothetical document is returned.
@@ -12,7 +20,7 @@ const { extractText } = require("../core/utils");
  */
 async function hyde(ctx, query, options = {}) {
   ctx.log("[HyDE] Step 1: Generating hypothetical document...");
-  const hypotheticalDoc = await ctx.chat(`Answer this question in detail: "${query}"`, options);
+  const hypotheticalDoc = await hypotheticalDocument(ctx, query, options);
 
   // Embedding is only useful if there is somewhere to search
   if (!ctx.hasVectorStore()) {
@@ -37,4 +45,4 @@ async function hyde(ctx, query, options = {}) {
   return ctx.chat(finalPrompt, { temperature: 0.3, max_tokens: 300, ...options });
 }
 
-module.exports = { hyde };
+module.exports = { hyde, hypotheticalDocument };

@@ -2,6 +2,16 @@
 const { sanitizeText, extractText } = require("../core/utils");
 
 /**
+ * subQuestions
+ * Expands a query into up to 3 related sub-questions
+ */
+async function subQuestions(ctx, query, options = {}) {
+  const prompt = `Generate 3 related sub-questions for: "${query}"\n\nProvide only the questions, one per line.`;
+  const raw = await ctx.chat(prompt, options);
+  return raw.split("\n").map(sanitizeText).filter(Boolean).slice(0, 3);
+}
+
+/**
  * Fan-Out Retrieval
  * Expands a query into multiple sub-questions and retrieves relevant information for each
  * @param {object} ctx - Call context from createCallContext
@@ -13,18 +23,16 @@ async function fanout(ctx, query, options = {}) {
   ctx.log("[Fan-Out] Step 1: Expanding query into sub-questions...");
 
   // 1. Expand query into sub-queries
-  const prompt = `Generate 3 related sub-questions for: "${query}"\n\nProvide only the questions, one per line.`;
-  const subQuestionsRaw = await ctx.chat(prompt, options);
-  const subQuestions = subQuestionsRaw.split("\n").map(sanitizeText).filter(Boolean).slice(0, 3);
+  const subQs = await subQuestions(ctx, query, options);
 
-  ctx.log(`[Fan-Out] Generated ${subQuestions.length} sub-questions`);
+  ctx.log(`[Fan-Out] Generated ${subQs.length} sub-questions`);
 
   // 2. Query vector store for each sub-question in parallel (skipped without a store)
   let allResults = [];
   if (ctx.hasVectorStore()) {
     ctx.log("[Fan-Out] Step 2: Retrieving results for each sub-question...");
     const perQuestion = await Promise.all(
-      subQuestions.map(async (subQ) => {
+      subQs.map(async (subQ) => {
         try {
           const vector = await ctx.embed(subQ);
           const dbResults = await ctx.queryVectors(vector, 3);
@@ -48,4 +56,4 @@ async function fanout(ctx, query, options = {}) {
   return sanitizeText(summary);
 }
 
-module.exports = { fanout };
+module.exports = { fanout, subQuestions };

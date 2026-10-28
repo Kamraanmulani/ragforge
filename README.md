@@ -38,6 +38,7 @@ Building RAG systems with advanced techniques is **hard**:
 
 ### The Solution
 
+✅ **Measurable**: `npx ragforge eval --docs ./docs` benchmarks every technique on your own documents and tells you which one to use  
 ✅ **Simple API**: Integrate advanced techniques in just a few lines  
 ✅ **Database Agnostic**: Works with Qdrant, Pinecone, Weaviate, or any vector database  
 ✅ **LLM Agnostic**: Compatible with OpenAI, Anthropic, Gemini, or custom models  
@@ -51,6 +52,7 @@ Building RAG systems with advanced techniques is **hard**:
 - [Features](#-features)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
+- [Evaluate Techniques on Your Data](#-evaluate-techniques-on-your-data)
 - [Instances, Providers, Cost & Caching](#%EF%B8%8F-instances-providers-cost--caching)
 - [Core Concepts](#-core-concepts)
 - [Available Techniques](#-available-techniques)
@@ -175,6 +177,63 @@ console.log('Answer:', result.answer);
 console.log('Retrieved docs:', result.retrieved);
 console.log('Translation:', result.translation);
 ```
+
+---
+
+## 📊 Evaluate Techniques on Your Data
+
+HyDE, Step-Back and Fan-Out help on some data and hurt on others, and every one of them adds LLM calls. Instead of guessing, measure:
+
+```bash
+npx ragforge eval --docs ./docs
+```
+
+What it does:
+
+1. Reads the `.txt`, `.md`, `.mdx` and `.rst` files in `./docs`, splits them into chunks and indexes them in memory (no database needed).
+2. Generates test questions with the LLM from chunks spread across your documents. The chunk a question came from is the right answer.
+3. Runs every technique on every question and checks whether it retrieved that chunk.
+4. Prints a scoreboard with hit rate, MRR, latency and cost per query, and recommends a technique. If no technique beats plain embedding search by at least 5 points, it recommends plain search, since the extra LLM calls aren't worth it.
+
+Useful options:
+
+```bash
+# Free and local with Ollama
+npx ragforge eval --docs ./docs --provider ollama --model qwen2.5
+
+# More questions, specific techniques (combine with +), shareable report
+npx ragforge eval --docs ./docs --questions 30 --techniques baseline,hyde,stepback,hyde+stepback --html report.html
+
+# Your own test questions: JSON array of { "question": "...", "expectedText": "..." }
+npx ragforge eval --docs ./docs --questions-file questions.json
+```
+
+Run `npx ragforge eval --help` for every option. With OpenAI, a 10-question run on the default techniques makes about 40 small `gpt-4o-mini` calls plus embeddings; the scoreboard shows the exact cost.
+
+**From code**, against documents or your existing vector store:
+
+```javascript
+const { createRagforge, formatTable } = require('ragforge');
+
+const rf = createRagforge();
+const result = await rf.evaluate({
+  documents: [{ id: 'handbook.md', content: handbookText }],
+  techniques: ['baseline', 'hyde', 'stepback', 'fanout'],
+  numQuestions: 20,
+  topK: 5
+});
+
+console.log(formatTable(result));
+console.log(result.recommendation); // { technique: 'hyde', reason: '...' }
+
+// Or test your production vector store with your own questions
+rf.setVectorStore(myQdrantStore);
+await rf.evaluate({
+  questions: [{ question: 'How do refunds work?', expectedText: 'refund within 30 days' }]
+});
+```
+
+`renderHtmlReport(result)` returns the same report as `--html`.
 
 ---
 
@@ -1335,8 +1394,15 @@ describe('HyDE Tests', () => {
 
 ```
 ragforge/
+├── bin/ragforge.js              # CLI entry (npx ragforge eval)
 ├── src/
 │   ├── createRagforge.js        # Instance factory
+│   ├── cli.js                   # CLI argument handling
+│   ├── eval/
+│   │   ├── evaluate.js          # Technique benchmark
+│   │   ├── chunk.js             # Document chunking
+│   │   ├── memoryVectorStore.js # In-memory cosine search
+│   │   └── report.js            # Console table + HTML report
 │   ├── providers/
 │   │   ├── openai.js            # OpenAI adapter
 │   │   └── ollama.js            # Ollama adapter (local models)
@@ -1395,8 +1461,8 @@ ragforge/
 
 ### Q: Which technique should I use?
 
-**A:** It depends on your use case:
-- **HyDE**: Best for most RAG scenarios, especially domain-specific queries
+**A:** Measure it on your data with `npx ragforge eval --docs ./docs` (see [Evaluate Techniques on Your Data](#-evaluate-techniques-on-your-data)). As a rough starting point:
+- **HyDE**: Short or vague queries over domain-specific documents
 - **CoT**: Complex reasoning, multi-step problems
 - **Step-Back**: Conceptual understanding, educational content
 - **Fan-Out**: Broad research, comprehensive coverage
@@ -1406,10 +1472,10 @@ ragforge/
 ### Q: How much does it cost?
 
 **A:** ragforge is **free and open-source**. You only pay for:
-- OpenAI API usage (embeddings + completions)
+- OpenAI API usage (embeddings + completions), or nothing with Ollama
 - Vector database hosting (if using cloud service)
 
-Typical costs: ~$0.01-0.05 per query depending on configuration.
+With the default `gpt-4o-mini`, a full pipeline query typically costs a fraction of a cent. You don't have to estimate: every `ragPipeline` result includes `stats.costUSD`, and `ragforge eval` shows cost per query for each technique.
 
 ### Q: Can I use ragforge in production?
 

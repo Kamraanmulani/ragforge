@@ -140,7 +140,76 @@ export interface PipelineResult {
   stats: Stats;
 }
 
+export type EvalTechnique = "baseline" | Technique | (string & {});
+
+export interface EvalQuestion {
+  question: string;
+  /** Id of the chunk/result that answers it */
+  expectedId?: string | number;
+  /** Text the answering chunk contains (case-insensitive) */
+  expectedText?: string;
+}
+
+export interface EvaluateOptions {
+  /** Corpus to chunk and index in memory. Omit to use the instance's vectorStore. */
+  documents?: Array<string | { id?: string; content: string }>;
+  /** Ground-truth questions. Generated from the documents when omitted. */
+  questions?: EvalQuestion[];
+  numQuestions?: number;
+  /** e.g. ["baseline", "hyde", "hyde+stepback"] */
+  techniques?: EvalTechnique[];
+  topK?: number;
+  chunkSize?: number;
+  concurrency?: number;
+  /** Hit-rate gain over baseline needed to recommend a technique (default 0.05) */
+  minImprovement?: number;
+  llmOptions?: LLMOptions;
+  onProgress?: (progress: { phase: "index" | "questions" | "run"; done: number; total: number }) => void;
+}
+
+export interface EvalRow {
+  technique: string;
+  hitRate: number;
+  mrr: number;
+  avgLatencyMs: number;
+  avgCostUSD: number | null;
+  totalCostUSD: number | null;
+  avgLlmCalls: number;
+  errors: number;
+}
+
+export interface EvalRun {
+  /** 1-based rank of the expected result, 0 when missed */
+  rank: number;
+  queries: string[];
+  retrieved: string[];
+  error?: string;
+}
+
+export interface EvalResult {
+  topK: number;
+  questionCount: number;
+  chunkCount: number | null;
+  techniques: string[];
+  provider: { llm: string; chatModel: string; embeddings: string; embeddingModel: string };
+  /** Usage for indexing and question generation */
+  setup: Stats;
+  results: EvalRow[];
+  ranking: string[];
+  best: string;
+  recommendation: { technique: string; reason: string };
+  questions: Array<EvalQuestion & { source?: string; runs: Record<string, EvalRun> }>;
+}
+
+export interface MemoryVectorStore extends VectorStore {
+  add(entries: Array<{ id: string; content: string; vector: number[]; metadata?: Record<string, unknown> }>): void;
+  query(vector: number[], topK?: number): Promise<Array<{ id: string; content: string; score: number; metadata?: Record<string, unknown> }>>;
+  readonly size: number;
+}
+
 export interface Ragforge {
+  /** Benchmark retrieval techniques on your data and get a recommendation */
+  evaluate(options: EvaluateOptions): Promise<EvalResult>;
   hyde(query: string, options?: CallOptions): Promise<string>;
   cot(query: string, options?: CallOptions): Promise<CotResult>;
   stepback(query: string, options?: CallOptions): Promise<StepbackResult>;
@@ -174,6 +243,16 @@ export function createOllamaProvider(options?: {
 }): Provider;
 
 export function createMemoryCache(options?: { maxEntries?: number }): MemoryCache;
+
+export function createMemoryVectorStore(): MemoryVectorStore;
+
+export function chunkText(text: string, options?: { size?: number }): string[];
+
+/** Plain-text scoreboard for an evaluate() result */
+export function formatTable(result: EvalResult): string;
+
+/** Standalone HTML report for an evaluate() result */
+export function renderHtmlReport(result: EvalResult, options?: { title?: string }): string;
 
 export const DEFAULT_PRICING: Record<string, Price>;
 

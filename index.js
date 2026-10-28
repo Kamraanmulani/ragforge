@@ -8,6 +8,9 @@ const { createOpenAIProvider, createOllamaProvider } = require("./src/providers"
 const { createMemoryCache } = require("./src/core/cache");
 const { DEFAULT_PRICING } = require("./src/core/pricing");
 const { rrf } = require("./src/techniques/rrf");
+const { createMemoryVectorStore } = require("./src/eval/memoryVectorStore");
+const { chunkText } = require("./src/eval/chunk");
+const { formatTable, renderHtmlReport } = require("./src/eval/report");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -18,6 +21,10 @@ module.exports = {
   createOpenAIProvider,
   createOllamaProvider,
   createMemoryCache,
+  createMemoryVectorStore,
+  chunkText,
+  formatTable,
+  renderHtmlReport,
   DEFAULT_PRICING,
 
   // v1 API (default instance)

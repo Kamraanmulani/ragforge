@@ -18,7 +18,10 @@
     "ollama",
     "vector-search",
     "embeddings",
-    "query-expansion"
+    "query-expansion",
+    "evaluation",
+    "benchmark",
+    "rag-evaluation"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
@@ -33,9 +36,13 @@
   "type": "commonjs",
   "main": "index.js",
   "types": "index.d.ts",
+  "bin": {
+    "ragforge": "bin/ragforge.js"
+  },
   "files": [
     "index.js",
     "index.d.ts",
+    "bin/",
     "src/",
     "LICENSE",
     "README.md"

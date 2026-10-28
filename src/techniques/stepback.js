@@ -2,6 +2,20 @@
 const { sanitizeText } = require("../core/utils");
 
 /**
+ * generalQuestion
+ * The broader, principle-based version of a specific question
+ */
+async function generalQuestion(ctx, query, options = {}) {
+  const stepBackPrompt = `You are given a specific question. Reformulate it into a more general, abstract, or principle-based question.
+
+Specific Question: "${query}"
+
+Provide only the reformulated general question:`;
+
+  return sanitizeText(await ctx.chat(stepBackPrompt, { temperature: 0.3, max_tokens: 100, ...options }));
+}
+
+/**
  * Step-Back Prompting
  * Takes a specific question and reformulates it into a more general, principle-based version
  * This helps retrieve broader conceptual knowledge that can better answer specific questions
@@ -15,15 +29,9 @@ async function stepback(ctx, query, options = {}) {
   ctx.log(`[Step-Back] Analyzing: "${query}"`);
 
   // Generate abstract/general version
-  const stepBackPrompt = `You are given a specific question. Reformulate it into a more general, abstract, or principle-based question.
+  const abstractQuery = await generalQuestion(ctx, query, options);
 
-Specific Question: "${query}"
-
-Provide only the reformulated general question:`;
-
-  const abstractQuery = await ctx.chat(stepBackPrompt, { temperature: 0.3, max_tokens: 100, ...options });
-
-  ctx.log(`[Step-Back] Abstract: "${sanitizeText(abstractQuery)}"`);
+  ctx.log(`[Step-Back] Abstract: "${abstractQuery}"`);
 
   // Generate reasoning
   const reasoningPrompt = `Explain briefly (1 sentence) why understanding the general concept helps answer the specific question.
@@ -36,10 +44,10 @@ General: "${abstractQuery}"`;
   ctx.log("[Step-Back] Complete!");
 
   return {
-    abstractQuery: sanitizeText(abstractQuery),
+    abstractQuery,
     originalQuery: query,
     reasoning: sanitizeText(reasoning)
   };
 }
 
-module.exports = { stepback };
+module.exports = { stepback, generalQuestion };
