@@ -103,6 +103,8 @@ Create a `.env` file in your project root:
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
+ragforge loads `.env` from the directory you start your app in (`process.cwd()`). A variable already set in your environment is used as-is. If the key is missing, the first LLM or embedding call throws an error; requiring ragforge never exits your process.
+
 ### Step 2: Basic Usage (Without Vector Database)
 
 ```javascript
@@ -126,12 +128,12 @@ console.log(abstract.abstractQuery); // "What are European capitals and their si
 ```javascript
 const { hyde, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragforge/src/core/openaiClient');
+const { getEmbedding } = require('ragforge');
 
 // Initialize your vector database
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
 
-// Configure ragify to use your database
+// Configure ragforge to use your database
 setVectorClient({
   query: async (vector, topK) => {
     const results = await qdrant.search('your_collection_name', {
@@ -176,13 +178,13 @@ console.log('Translation:', result.translation);
 
 ### 1. Query Translation
 
-Traditional RAG directly embeds user queries, which can miss relevant documents. **ragify** translates queries into forms that match your knowledge base better:
+Traditional RAG directly embeds user queries, which can miss relevant documents. **ragforge** translates queries into forms that match your knowledge base better:
 
 ```javascript
 // Direct embedding (traditional)
 "What is ML?" → [0.23, 0.45, ...] → Search
 
-// Query translation (ragify)
+// Query translation (ragforge)
 "What is ML?" → "Machine learning is a subset of AI..." → [0.28, 0.52, ...] → Better Search
 ```
 
@@ -550,6 +552,8 @@ const answer = await hyde(query, options);
 
 **Returns:** `Promise<string>` - Final answer
 
+When a vector client is set, the final answer call defaults to `temperature: 0.3` and `max_tokens: 300`; any options you pass override those.
+
 **Example:**
 ```javascript
 const answer = await hyde("What is quantum computing?", {
@@ -677,8 +681,11 @@ const result = await ragPipeline(query, options);
     - Available: `"hyde"`, `"cot"`, `"fanout"`, `"stepback"`
   - `topK` (number): Top results to return (default: 5)
   - `rerankK` (number): Results to consider for reranking (default: 20)
+  - `techniqueOptions` (object): LLM options passed to every technique (hyde, cot, stepback, fanout)
   - `finalModelOptions` (object): LLM options for final synthesis
     - `model`, `temperature`, `max_tokens`, etc.
+
+If a vector client is set, each translated sub-query is embedded with `getEmbedding` and passed to your client's `query(vector, topK)`, the same contract `hyde` and `fanout` use. Without a vector client, no retrieval or embedding calls are made and the answer is built from the technique outputs.
 
 **Returns:** `Promise<{query: string, translation: object, retrieved: Array, answer: string}>`
 
@@ -712,7 +719,7 @@ console.log('Translation:', result.translation);
 Generate embeddings using OpenAI's API.
 
 ```javascript
-const { getEmbedding } = require('ragforge/src/core/openaiClient');
+const { getEmbedding } = require('ragforge');
 
 const vector = await getEmbedding("Your text here");
 console.log(vector.length); // 1536 (for text-embedding-ada-002)
@@ -723,7 +730,7 @@ console.log(vector.length); // 1536 (for text-embedding-ada-002)
 Call the LLM with custom prompts.
 
 ```javascript
-const { callLLM } = require('ragforge/src/core/openaiClient');
+const { callLLM } = require('ragforge');
 
 const response = await callLLM("Explain quantum physics", {
   model: "gpt-4",
@@ -771,13 +778,13 @@ Complete setup with a real vector database for production use.
 ```javascript
 const { hyde, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragforge/src/core/openaiClient');
+const { getEmbedding } = require('ragforge');
 
 // 1. Initialize Qdrant client
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
 const COLLECTION_NAME = 'my_knowledge_base';
 
-// 2. Configure ragify to use Qdrant
+// 2. Configure ragforge to use Qdrant
 setVectorClient({
   query: async (vector, topK) => {
     const results = await qdrant.search(COLLECTION_NAME, {
@@ -907,7 +914,7 @@ Merge results from multiple search strategies.
 ```javascript
 const { rrf, setVectorClient } = require('ragforge');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragforge/src/core/openaiClient');
+const { getEmbedding } = require('ragforge');
 
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
 
@@ -957,7 +964,7 @@ Setup a vector database with sample data.
 
 ```javascript
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('ragforge/src/core/openaiClient');
+const { getEmbedding } = require('ragforge');
 
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });
 const COLLECTION_NAME = 'my_docs';
@@ -1083,8 +1090,17 @@ Create a `.env` file in your project root:
 OPENAI_API_KEY=sk-your-openai-api-key-here
 
 # Optional: Custom API Configuration
-OPENAI_API_BASE=https://api.openai.com/v1  # Custom endpoint
-OPENAI_ORGANIZATION=org-your-org-id        # Organization ID
+OPENAI_BASE_URL=https://api.openai.com/v1  # Custom endpoint
+OPENAI_ORG_ID=org-your-org-id              # Organization ID
+```
+
+To configure the OpenAI client yourself (custom key, base URL, proxy), inject it:
+
+```javascript
+const OpenAI = require('openai');
+const { setOpenAIClient } = require('ragforge');
+
+setOpenAIClient(new OpenAI({ apiKey: 'sk-...', baseURL: 'https://my-proxy/v1' }));
 ```
 
 ### Default Settings
@@ -1322,7 +1338,7 @@ ragforge/
 
 ### Q: How much does it cost?
 
-**A:** ragify is **free and open-source**. You only pay for:
+**A:** ragforge is **free and open-source**. You only pay for:
 - OpenAI API usage (embeddings + completions)
 - Vector database hosting (if using cloud service)
 
@@ -1378,7 +1394,7 @@ Contributions are welcome and appreciated! Here's how you can help:
 
 ### Ways to Contribute
 
-- 🐛 **Report bugs** - Open an issue on [GitHub](https://github.com/Kamraanmulani/ragify/issues)
+- 🐛 **Report bugs** - Open an issue on [GitHub](https://github.com/Kamraanmulani/ragforge/issues)
 - 💡 **Suggest features** - Share your ideas for improvements
 - 📝 **Improve documentation** - Help make the docs clearer
 - 🔧 **Submit pull requests** - Fix bugs or add features

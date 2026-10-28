@@ -12,6 +12,14 @@ function setVectorClient(userClient) {
 }
 
 /**
+ * hasVectorClient
+ * True once a vector DB client has been injected
+ */
+function hasVectorClient() {
+  return client !== null;
+}
+
+/**
  * upsertVector
  * Stores vector in DB
  */
@@ -29,4 +37,4 @@ async function queryVector(vector, topK = 5) {
   return client.query(vector, topK); // user-defined DB client
 }
 
-module.exports = { setVectorClient, upsertVector, queryVector };
+module.exports = { setVectorClient, hasVectorClient, upsertVector, queryVector };

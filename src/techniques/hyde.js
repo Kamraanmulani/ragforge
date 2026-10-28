@@ -2,10 +2,10 @@
 const { callLLM, getEmbedding } = require("../core/openaiClient");
 const { queryVector } = require("../core/vectorClient");
 
-async function hyde(query) {
+async function hyde(query, options = {}) {
   console.log('[HyDE] Step 1: Generating hypothetical document...');
   const prompt = `Answer this question in detail: "${query}"`;
-  const hypotheticalDoc = await callLLM(prompt);
+  const hypotheticalDoc = await callLLM(prompt, options);
   console.log(`[HyDE] Generated: ${hypotheticalDoc.substring(0, 100)}...`);
   
   console.log('[HyDE] Step 2: Creating embedding...');
@@ -34,7 +34,7 @@ async function hyde(query) {
     .join('\n\n');
     
   const finalPrompt = `Using this context, answer: "${query}"\n\nContext:\n${context}\n\nAnswer:`;
-  const answer = await callLLM(finalPrompt, { temperature: 0.3, max_tokens: 300 });
+  const answer = await callLLM(finalPrompt, { temperature: 0.3, max_tokens: 300, ...options });
   console.log('[HyDE] Complete!');
   
   return answer;

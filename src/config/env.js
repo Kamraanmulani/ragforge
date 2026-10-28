@@ -2,16 +2,23 @@
 const dotenv = require("dotenv");
 const path = require("path");
 
-// Load environment variables from .env file
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+// Load .env from the consuming project's root (where the app is started),
+// never from inside node_modules. Existing env vars are not overridden.
+dotenv.config({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-if (!OPENAI_API_KEY) {
-  console.error("[ragify] ❌ Missing OPENAI_API_KEY in .env file");
-  console.error("[ragify] Please create a .env file in the root directory with:");
-  console.error("[ragify] OPENAI_API_KEY=your_api_key_here");
-  process.exit(1);
+/**
+ * getOpenAIKey
+ * Read lazily so requiring ragforge never crashes the host app.
+ * Throws only when an OpenAI call is actually made without a key.
+ */
+function getOpenAIKey() {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) {
+    throw new Error(
+      "[ragforge] Missing OPENAI_API_KEY. Set it in your environment or in a .env file in your project root."
+    );
+  }
+  return key;
 }
 
-module.exports = { OPENAI_API_KEY };
+module.exports = { getOpenAIKey };

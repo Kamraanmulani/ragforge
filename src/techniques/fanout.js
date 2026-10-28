@@ -9,14 +9,15 @@ const { sanitizeText, logInfo } = require("../core/utils");
  * Fan-Out Retrieval
  * Expands a query into multiple sub-questions and retrieves relevant information for each
  * @param {string} query - The original query
+ * @param {object} options - LLM options (model, temperature, max_tokens, ...)
  * @returns {Promise<string>} - Combined answer from all sub-queries
  */
-async function fanout(query) {
+async function fanout(query, options = {}) {
   logInfo("[Fan-Out] Step 1: Expanding query into sub-questions...");
   
   // 1. Expand query into sub-queries
   const prompt = `Generate 3 related sub-questions for: "${query}"\n\nProvide only the questions, one per line.`;
-  const subQuestionsRaw = await callLLM(prompt);
+  const subQuestionsRaw = await callLLM(prompt, options);
   const subQuestions = subQuestionsRaw.split("\n").map(sanitizeText).filter(Boolean).slice(0, 3);
   
   logInfo(`[Fan-Out] Generated ${subQuestions.length} sub-questions`);
@@ -54,7 +55,7 @@ async function fanout(query) {
   // 3. Combine and summarize via LLM
   const combinedContext = allResults.join("\n\n").substring(0, 3000); // Limit context size
   const combinedPrompt = `Based on the following information, provide a comprehensive answer to: "${query}"\n\nInformation:\n${combinedContext}`;
-  const summary = await callLLM(combinedPrompt);
+  const summary = await callLLM(combinedPrompt, options);
 
   logInfo("[Fan-Out] Complete!");
   return sanitizeText(summary);

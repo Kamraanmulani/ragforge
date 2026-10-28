@@ -11,9 +11,10 @@ async function translate(query, options = {}) {
   /**
    * options:
    *  - techniques: array e.g. ['hyde','cot','stepback','fanout']
-   *  - fanoutCount: number (handled inside fanout)
+   *  - techniqueOptions: LLM options passed to each technique (model, temperature, ...)
    */
-  const techs = options.techniques || ["hyde", "cot", "fanout"];
+  const techs = options.techniques ?? ["hyde", "cot", "fanout"];
+  const llmOpts = options.techniqueOptions ?? {};
   const out = {
     originalQuery: query,
     hyde: null,
@@ -28,7 +29,7 @@ async function translate(query, options = {}) {
   // Run HyDE if requested
   if (techs.includes("hyde")) {
     try {
-      const hydeAns = await hyde(query);
+      const hydeAns = await hyde(query, llmOpts);
       out.hyde = sanitizeText(hydeAns);
       // Use hyde answer itself as a potential retrieval sub-query
       out.subQueries.push(out.hyde);
@@ -40,7 +41,7 @@ async function translate(query, options = {}) {
   // Chain-of-Thought
   if (techs.includes("cot")) {
     try {
-      const cotObj = await cot(query);
+      const cotObj = await cot(query, llmOpts);
       // cot returns { reasoning, refinedQuery } per our template
       out.cot = cotObj;
       if (cotObj && cotObj.refinedQuery) out.subQueries.push(cotObj.refinedQuery);
@@ -52,7 +53,7 @@ async function translate(query, options = {}) {
   // Step-back (abstract)
   if (techs.includes("stepback")) {
     try {
-      const sb = await stepback(query);
+      const sb = await stepback(query, llmOpts);
       out.stepback = sb;
       if (sb && sb.abstractQuery) out.subQueries.push(sb.abstractQuery);
     } catch (err) {
@@ -63,7 +64,7 @@ async function translate(query, options = {}) {
   // Fan-out -> returns a summary and typically generates sub-questions
   if (techs.includes("fanout")) {
     try {
-      const fan = await fanout(query);
+      const fan = await fanout(query, llmOpts);
       // fanout returns a summary string in our template; if you later make it return subqueries, adapt accordingly
       out.fanout = fan;
       // If fanout produced sub-questions, try to detect them (it may just be a summary string)

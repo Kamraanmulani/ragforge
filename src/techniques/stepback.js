@@ -10,9 +10,10 @@ const { sanitizeText, logInfo } = require("../core/utils");
  * This helps retrieve broader conceptual knowledge that can better answer specific questions
  * 
  * @param {string} query - The specific query to step back from
+ * @param {object} options - LLM options (model, temperature, max_tokens, ...)
  * @returns {Promise<{abstractQuery: string, originalQuery: string, reasoning: string}>}
  */
-async function stepback(query) {
+async function stepback(query, options = {}) {
   logInfo(`[Step-Back] Analyzing: "${query}"`);
   
   // Generate abstract/general version
@@ -22,7 +23,7 @@ Specific Question: "${query}"
 
 Provide only the reformulated general question:`;
 
-  const abstractQuery = await callLLM(stepBackPrompt, { temperature: 0.3, max_tokens: 100 });
+  const abstractQuery = await callLLM(stepBackPrompt, { temperature: 0.3, max_tokens: 100, ...options });
   
   logInfo(`[Step-Back] Abstract: "${sanitizeText(abstractQuery)}"`);
   
@@ -32,7 +33,7 @@ Provide only the reformulated general question:`;
 Specific: "${query}"
 General: "${abstractQuery}"`;
 
-  const reasoning = await callLLM(reasoningPrompt, { temperature: 0.3, max_tokens: 80 });
+  const reasoning = await callLLM(reasoningPrompt, { temperature: 0.3, max_tokens: 80, ...options });
   
   logInfo("[Step-Back] Complete!");
   

@@ -2,9 +2,9 @@
 
 // src/pipeline/ragPipeline.js
 const { translate } = require("./queryTranslator");
-const { queryVector } = require("../core/vectorClient");
+const { queryVector, hasVectorClient } = require("../core/vectorClient");
 const { rrf } = require("../techniques/rrf");
-const { callLLM } = require("../core/openaiClient");
+const { callLLM, getEmbedding } = require("../core/openaiClient");
 const { sanitizeText, logInfo } = require("../core/utils");
 
 /**
@@ -14,33 +14,39 @@ const { sanitizeText, logInfo } = require("../core/utils");
  *    techniques: ['hyde','cot','fanout',...],
  *    topK: number,
  *    rerankK: number,
+ *    techniqueOptions: { model, temperature, max_tokens, ... },
  *    finalModelOptions: { model, temperature, max_tokens, ... }
  * }
  *
  * Behavior:
  * - Runs queryTranslator to produce subqueries and technique outputs
- * - If a vector DB client is set (queryVector returns results), query it for each subquery
+ * - If a vector DB client is set, embeds each subquery and queries it
  * - Merge retrieval results using RRF (if multiple result lists)
  * - Use top passages (or HyDE/fanout outputs if no DB) to synthesize final answer via LLM
  */
 async function ragPipeline(query, options = {}) {
   const opts = {
-    techniques: options.techniques || ["hyde", "cot", "fanout"],
-    topK: options.topK || 5,
-    rerankK: options.rerankK || 20,
-    finalModelOptions: options.finalModelOptions || {},
+    techniques: options.techniques ?? ["hyde", "cot", "fanout"],
+    topK: options.topK ?? 5,
+    rerankK: options.rerankK ?? 20,
+    techniqueOptions: options.techniqueOptions ?? {},
+    finalModelOptions: options.finalModelOptions ?? {},
   };
 
   logInfo("[ragPipeline] Translating query...");
-  const translation = await translate(query, { techniques: opts.techniques });
+  const translation = await translate(query, {
+    techniques: opts.techniques,
+    techniqueOptions: opts.techniqueOptions,
+  });
 
   // Attempt retrieval for each subQuery (DB optional)
   const retrievalLists = []; // each element: array of results for that subquery
-  for (const subQ of translation.subQueries) {
+  const subQueries = hasVectorClient() ? translation.subQueries : [];
+  for (const subQ of subQueries) {
     try {
-      // queryVector is intentionally generic: user-provided client should accept either
-      // a string query or a pre-computed vector depending on their implementation.
-      const list = await queryVector(subQ, opts.topK);
+      // Same contract as hyde/fanout: the vector client always receives an embedding
+      const vector = await getEmbedding(subQ);
+      const list = await queryVector(vector, opts.topK);
       // Normalize to an array of { id?, score?, answer?, payload? } - depending on user client
       if (Array.isArray(list) && list.length > 0) {
         retrievalLists.push(list);
@@ -60,6 +66,7 @@ async function ragPipeline(query, options = {}) {
       lst.map((item) => {
         // try to extract a text field
         if (typeof item === "string") return item;
+        if (item.content) return item.content;
         if (item.answer) return item.answer;
         if (item.payload && item.payload.text) return item.payload.text;
         if (item.payload && item.payload.content) return item.payload.content;

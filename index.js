@@ -8,13 +8,17 @@ const { rrf } = require("./src/techniques/rrf");
 const { fanout } = require("./src/techniques/fanout");
 const { setVectorClient } = require("./src/core/vectorClient");
 const { ragPipeline } = require("./src/pipeline/ragPipeline");
+const { callLLM, getEmbedding, setOpenAIClient } = require("./src/core/openaiClient");
 
-module.exports = { 
-  hyde, 
-  cot, 
-  stepback, 
-  rrf, 
-  fanout, 
+module.exports = {
+  hyde,
+  cot,
+  stepback,
+  rrf,
+  fanout,
   setVectorClient,
-  ragPipeline 
+  ragPipeline,
+  callLLM,
+  getEmbedding,
+  setOpenAIClient
 };
