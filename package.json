@@ -1,6 +1,6 @@
 {
   "name": "ragforge",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Find the RAG query technique that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, Chain-of-Thought and RRF, benchmarked on your documents and routed per query, for OpenAI, Ollama and any vector database.",
   "keywords": [
     "rag",
