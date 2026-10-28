@@ -11,6 +11,7 @@ const { rrf } = require("./src/techniques/rrf");
 const { createMemoryVectorStore } = require("./src/eval/memoryVectorStore");
 const { chunkText } = require("./src/eval/chunk");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
+const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -25,6 +26,8 @@ module.exports = {
   chunkText,
   formatTable,
   renderHtmlReport,
+  classifyQuery,
+  DEFAULT_RULES,
   DEFAULT_PRICING,
 
   // v1 API (default instance)
@@ -33,6 +36,7 @@ module.exports = {
   stepback: (query, options) => getDefault().stepback(query, options),
   fanout: (query, options) => getDefault().fanout(query, options),
   ragPipeline: (query, options) => getDefault().ragPipeline(query, options),
+  auto: (query, options) => getDefault().auto(query, options),
   rrf,
   setVectorClient: (client) => getDefault().setVectorStore(client),
   callLLM: (prompt, options) => getDefault().callLLM(prompt, options),

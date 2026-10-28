@@ -207,7 +207,49 @@ export interface MemoryVectorStore extends VectorStore {
   readonly size: number;
 }
 
+export type QueryCategory = "comparison" | "exact" | "short" | "conceptual" | "simple";
+
+export interface RouteOptions extends CallOptions {
+  /** How to classify the query: free rules (default) or one small LLM call */
+  router?: "rules" | "llm";
+  /** An evaluate() result (or its saved JSON) to learn technique choices from */
+  from?: EvalResult;
+  /** Techniques the router may pick (ignored with `from`) */
+  techniques?: EvalTechnique[];
+  /** Override the technique for a category, e.g. { short: "hyde+stepback" } */
+  rules?: Partial<Record<QueryCategory, EvalTechnique>>;
+  /** LLM options for the "llm" classifier */
+  routerOptions?: LLMOptions;
+  /** With `from`: questions a category needs before its own result is trusted (default 3) */
+  minSamples?: number;
+  /** With `from`: hit-rate gain over baseline needed to pick a technique (default 0.05) */
+  minImprovement?: number;
+}
+
+export interface Route {
+  technique: string;
+  category: QueryCategory;
+  classifier: "rules" | "llm";
+  decidedBy: "rules" | "eval";
+  reason: string;
+}
+
+export interface AutoOptions extends RouteOptions {
+  topK?: number;
+  rerankK?: number;
+  techniqueOptions?: LLMOptions;
+  finalModelOptions?: LLMOptions;
+}
+
+export interface AutoResult extends PipelineResult {
+  route: Route;
+}
+
 export interface Ragforge {
+  /** Pick a technique for the query without running it */
+  route(query: string, options?: RouteOptions): Promise<Route>;
+  /** Pick a technique for the query, then run the pipeline with it */
+  auto(query: string, options?: AutoOptions): Promise<AutoResult>;
   /** Benchmark retrieval techniques on your data and get a recommendation */
   evaluate(options: EvaluateOptions): Promise<EvalResult>;
   hyde(query: string, options?: CallOptions): Promise<string>;
@@ -254,6 +296,12 @@ export function formatTable(result: EvalResult): string;
 /** Standalone HTML report for an evaluate() result */
 export function renderHtmlReport(result: EvalResult, options?: { title?: string }): string;
 
+/** Rule-based query category, no LLM call */
+export function classifyQuery(query: string): { category: QueryCategory; reason: string };
+
+/** Default technique per query category */
+export const DEFAULT_RULES: Record<QueryCategory, EvalTechnique>;
+
 export const DEFAULT_PRICING: Record<string, Price>;
 
 // v1 API (default OpenAI instance)
@@ -262,6 +310,7 @@ export function cot(query: string, options?: CallOptions): Promise<CotResult>;
 export function stepback(query: string, options?: CallOptions): Promise<StepbackResult>;
 export function fanout(query: string, options?: CallOptions): Promise<string>;
 export function ragPipeline(query: string, options?: PipelineOptions): Promise<PipelineResult>;
+export function auto(query: string, options?: AutoOptions): Promise<AutoResult>;
 export function rrf<T = string>(rankedLists: T[][], k?: number): string[];
 export function setVectorClient(client: VectorStore | null): void;
 export function callLLM(prompt: string, options?: CallOptions): Promise<string>;

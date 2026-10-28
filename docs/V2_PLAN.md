@@ -41,12 +41,18 @@ Work happens on the `v2` branch; `main` stays on 1.x until release.
 
 Not yet verified against a real provider (needs an OpenAI key or a running Ollama).
 
-## Phase 3: Auto-router
+## Phase 3: Auto-router (done)
 
-- `rf.auto(query, options)` picks a technique per query.
-- Rule-based classifier first (length, comparison words like "vs"/"compare"/"difference", specificity), optional cheap LLM classifier (`router: "llm"`).
-- Can be seeded from an eval result: `rf.auto(query, { from: evalResult })`.
-- Returns `{ technique, reason, ...pipelineResult }` so the choice is visible.
+| Item | Status |
+|---|---|
+| `classifyQuery()`: rules sort queries into comparison / exact / short / conceptual / simple | Done |
+| Default category → technique map (fanout / baseline / hyde / stepback / baseline), overridable via `rules` | Done |
+| `router: "llm"`: one temperature-0, 10-token classification call; falls back to rules on a bad answer | Done |
+| `from: evalResult`: per-category winner learned from eval questions (`minSamples` 3, `minImprovement` 5 points, ties to the cheaper technique); works with saved JSON | Done |
+| `rf.route()` (decision only) and `rf.auto()` (route + pipeline); result carries `route: { technique, category, classifier, decidedBy, reason }` | Done |
+| `techniques` limits what the router may pick | Done |
+
+Note: the result keeps the pipeline shape and adds `route`, rather than spreading `technique`/`reason` at the top level as first sketched.
 
 ## Phase 4: Release and launch
 

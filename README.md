@@ -53,6 +53,7 @@ Building RAG systems with advanced techniques is **hard**:
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
 - [Evaluate Techniques on Your Data](#-evaluate-techniques-on-your-data)
+- [Auto-Routing](#-auto-routing)
 - [Instances, Providers, Cost & Caching](#%EF%B8%8F-instances-providers-cost--caching)
 - [Core Concepts](#-core-concepts)
 - [Available Techniques](#-available-techniques)
@@ -234,6 +235,61 @@ await rf.evaluate({
 ```
 
 `renderHtmlReport(result)` returns the same report as `--html`.
+
+---
+
+## 🧭 Auto-Routing
+
+Different queries need different techniques. `auto()` picks one per query, then runs the pipeline with it, so simple lookups don't pay for extra LLM calls:
+
+```javascript
+const { createRagforge } = require('ragforge');
+const rf = createRagforge({ vectorStore });
+
+const result = await rf.auto('PostgreSQL vs MySQL for analytics');
+console.log(result.answer);
+console.log(result.route);
+// { technique: 'fanout', category: 'comparison', classifier: 'rules', decidedBy: 'rules',
+//   reason: 'The query compares things or asks several questions, so each part gets its own search.' }
+```
+
+Each query is put in a category, and each category has a default technique:
+
+| Category | Example | Technique |
+|---|---|---|
+| `comparison` | "PostgreSQL vs MySQL", two questions in one | `fanout` |
+| `exact` | "What does error E404 mean?", quoted terms, `snake_case`, file names | `baseline` (plain search) |
+| `short` | "refund policy" | `hyde` |
+| `conceptual` | "Why does a higher learning rate make the loss diverge?" | `stepback` |
+| `simple` | Any other clear question | `baseline` |
+
+Classifying with the built-in rules is free and instant. For fuzzier queries, `{ router: 'llm' }` uses one small LLM call instead (temperature 0, 10 tokens).
+
+**Route using your eval results.** This is the best option. Run the eval once, save the JSON, and `auto()` uses whichever technique actually won for each category on your data:
+
+```bash
+npx ragforge eval --docs ./docs --questions 30 --json eval.json
+```
+
+```javascript
+const evalResult = require('./eval.json');
+
+const result = await rf.auto(userQuery, { from: evalResult });
+// route.reason: 'On 8 short questions in your eval, hyde found the right chunk 88% of the time vs 50% for plain search.'
+```
+
+A category needs at least 3 eval questions (`minSamples`) to be trusted; otherwise the eval's overall recommendation is used. As with the eval, a technique must beat plain search by 5 points (`minImprovement`) to be picked.
+
+Other options:
+
+```javascript
+await rf.route(query);                                         // just the decision, nothing runs
+await rf.auto(query, { techniques: ['baseline', 'hyde'] });    // limit what the router may pick
+await rf.auto(query, { rules: { short: 'hyde+stepback' } });   // change a category's technique
+await rf.auto(query, { topK: 8, finalModelOptions: { model: 'gpt-4o' } }); // pipeline options still apply
+```
+
+`classifyQuery(query)` is also exported if you want the category for your own logic.
 
 ---
 
@@ -1398,6 +1454,9 @@ ragforge/
 ├── src/
 │   ├── createRagforge.js        # Instance factory
 │   ├── cli.js                   # CLI argument handling
+│   ├── router/
+│   │   ├── classify.js          # Rule-based query categories
+│   │   └── route.js             # Technique choice (rules, LLM, eval results)
 │   ├── eval/
 │   │   ├── evaluate.js          # Technique benchmark
 │   │   ├── chunk.js             # Document chunking
@@ -1461,7 +1520,7 @@ ragforge/
 
 ### Q: Which technique should I use?
 
-**A:** Measure it on your data with `npx ragforge eval --docs ./docs` (see [Evaluate Techniques on Your Data](#-evaluate-techniques-on-your-data)). As a rough starting point:
+**A:** Measure it on your data with `npx ragforge eval --docs ./docs` (see [Evaluate Techniques on Your Data](#-evaluate-techniques-on-your-data)), then let `rf.auto(query, { from: evalResult })` pick per query (see [Auto-Routing](#-auto-routing)). As a rough starting point:
 - **HyDE**: Short or vague queries over domain-specific documents
 - **CoT**: Complex reasoning, multi-step problems
 - **Step-Back**: Conceptual understanding, educational content

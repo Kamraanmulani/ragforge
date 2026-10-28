@@ -13,6 +13,7 @@ const { rrf } = require("./techniques/rrf");
 const { translate } = require("./pipeline/queryTranslator");
 const { ragPipeline } = require("./pipeline/ragPipeline");
 const { evaluate } = require("./eval/evaluate");
+const { route, pipelineTechniques } = require("./router/route");
 
 /**
  * createRagforge
@@ -59,6 +60,17 @@ function createRagforge(options = {}) {
       run(async (ctx) => {
         const result = await ragPipeline(ctx, query, opts);
         return { ...result, stats: ctx.tracker.snapshot() };
+      }, opts),
+
+    // Picks a technique for the query without running it; see src/router/route.js
+    route: (query, opts = {}) => run((ctx) => route(ctx, query, opts), opts),
+
+    // Routes the query, then runs the pipeline with the chosen technique
+    auto: (query, opts = {}) =>
+      run(async (ctx) => {
+        const chosen = await route(ctx, query, opts);
+        const result = await ragPipeline(ctx, query, { ...opts, techniques: pipelineTechniques(chosen.technique) });
+        return { ...result, route: chosen, stats: ctx.tracker.snapshot() };
       }, opts),
 
     // Benchmarks retrieval techniques; see src/eval/evaluate.js for options
