@@ -1,6 +1,6 @@
 // Tests for Chain of Thought prompting
 
-const { cot } = require('../index');
+const { cot } = require('../../index');
 
 describe('Chain of Thought (CoT) Technique', () => {
   test('should break down query into reasoning steps', async () => {

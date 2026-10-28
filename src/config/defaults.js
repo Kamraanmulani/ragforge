@@ -1,8 +1,7 @@
-// default params like model, temperature, limits
-
-// Default parameters for LLM calls
+// Default parameters for LLM calls.
+// The model comes from the provider (OpenAI: gpt-4o-mini) unless set here
+// via createRagforge({ defaults: { model } }) or per call.
 module.exports = {
-  model: "gpt-4",
   temperature: 0.7,
   maxTokens: 500,
   topP: 1,

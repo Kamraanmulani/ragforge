@@ -1,6 +1,6 @@
 // Tests for Reciprocal Rank Fusion
 
-const { rrf } = require('../index');
+const { rrf } = require('../../index');
 
 describe('Reciprocal Rank Fusion (RRF)', () => {
   test('should merge multiple ranked lists', () => {

@@ -2,7 +2,7 @@
 // Compares regular vector search vs HyDE-enhanced search on ml_knowledge collection
 
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding, callLLM } = require('../src/core/openaiClient');
+const { getEmbedding, callLLM } = require('../index');
 
 const COLLECTION_NAME = 'ml_knowledge';
 const TOP_K = 3;

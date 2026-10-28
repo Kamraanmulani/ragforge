@@ -1,6 +1,6 @@
 // Tests for Fan-Out Retrieval logic
 
-const { fanout, setVectorClient } = require('../index');
+const { fanout, setVectorClient } = require('../../index');
 const { QdrantClient } = require('@qdrant/js-client-rest');
 
 const COLLECTION_NAME = 'ml_knowledge';

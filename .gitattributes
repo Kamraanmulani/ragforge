@@ -1,0 +1,6 @@
+# Keep LF everywhere: npm publishes files as they are on disk, and a CRLF
+# shebang in bin/ breaks `npx ragforge` on macOS and Linux
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary

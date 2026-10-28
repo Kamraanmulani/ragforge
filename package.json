@@ -1,7 +1,7 @@
 {
   "name": "ragforge",
   "version": "1.1.0",
-  "description": "A lightweight developer toolkit that simplifies the use of advanced query translation techniques — HyDE, Chain of Thought, Step-Back Prompting, Reciprocal Rank Fusion, and Fan-Out Retrieval — for any Retrieval-Augmented Generation (RAG) system, independent of the vector database or LLM provider.",
+  "description": "Find the RAG query technique that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, Chain-of-Thought and RRF, benchmarked on your documents and routed per query, for OpenAI, Ollama and any vector database.",
   "keywords": [
     "rag",
     "genai",
@@ -12,7 +12,16 @@
     "rrf",
     "fan-out",
     "ai",
-    "query-translation"
+    "query-translation",
+    "llm",
+    "openai",
+    "ollama",
+    "vector-search",
+    "embeddings",
+    "query-expansion",
+    "evaluation",
+    "benchmark",
+    "rag-evaluation"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
@@ -22,22 +31,39 @@
     "type": "git",
     "url": "git+https://github.com/Kamraanmulani/ragforge.git"
   },
-  "license": "ISC",
+  "license": "MIT",
   "author": "kamraanmulani",
   "type": "commonjs",
   "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "ragforge": "bin/ragforge.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin/",
+    "src/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "test": "jest --verbose",
-    "test:watch": "jest --watch"
+    "test": "jest tests/unit",
+    "test:integration": "jest tests/integration --runInBand",
+    "test:watch": "jest tests/unit --watch",
+    "typecheck": "tsc --noEmit --strict index.d.ts"
   },
   "dependencies": {
-    "@qdrant/js-client-rest": "^1.15.1",
-    "axios": "^1.12.2",
     "dotenv": "^17.2.3",
-    "nodemon": "^3.1.10",
     "openai": "^6.1.0"
   },
   "devDependencies": {
-    "jest": "^30.2.0"
+    "@qdrant/js-client-rest": "^1.15.1",
+    "jest": "^30.2.0",
+    "typescript": "^5.9.3"
   }
 }

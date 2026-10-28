@@ -1,20 +1,38 @@
 // orchestrates multiple techniques together
-
-// src/pipeline/queryTranslator.js
 const { hyde } = require("../techniques/hyde");
 const { cot } = require("../techniques/cot");
 const { stepback } = require("../techniques/stepback");
 const { fanout } = require("../techniques/fanout");
-const { logInfo, sanitizeText } = require("../core/utils");
+const { sanitizeText } = require("../core/utils");
 
-async function translate(query, options = {}) {
-  /**
-   * options:
-   *  - techniques: array e.g. ['hyde','cot','stepback','fanout']
-   *  - techniqueOptions: LLM options passed to each technique (model, temperature, ...)
-   */
+const TECHNIQUES = { hyde, cot, stepback, fanout };
+
+// How each technique's output becomes a retrieval sub-query
+const toSubQuery = {
+  hyde: (out) => out,
+  cot: (out) => out && out.refinedQuery,
+  stepback: (out) => out && out.abstractQuery,
+  fanout: (out) => out,
+};
+
+/**
+ * translate
+ * Runs the selected techniques in parallel and collects retrieval sub-queries.
+ * @param {object} ctx - Call context from createCallContext
+ * @param {string} query
+ * @param {object} options
+ *  - techniques: array e.g. ['hyde','cot','stepback','fanout']
+ *  - techniqueOptions: LLM options passed to each technique (model, temperature, ...)
+ */
+async function translate(ctx, query, options = {}) {
   const techs = options.techniques ?? ["hyde", "cot", "fanout"];
   const llmOpts = options.techniqueOptions ?? {};
+
+  const unknown = techs.filter((t) => !TECHNIQUES[t]);
+  if (unknown.length) {
+    throw new Error(`[ragforge] Unknown technique(s): ${unknown.join(", ")}. Available: ${Object.keys(TECHNIQUES).join(", ")}`);
+  }
+
   const out = {
     originalQuery: query,
     hyde: null,
@@ -24,55 +42,23 @@ async function translate(query, options = {}) {
     subQueries: [] // useful for rag retrieval
   };
 
-  logInfo(`[queryTranslator] Running techniques: ${techs.join(", ")}`);
+  ctx.log(`[queryTranslator] Running techniques: ${techs.join(", ")}`);
 
-  // Run HyDE if requested
-  if (techs.includes("hyde")) {
-    try {
-      const hydeAns = await hyde(query, llmOpts);
-      out.hyde = sanitizeText(hydeAns);
-      // Use hyde answer itself as a potential retrieval sub-query
-      out.subQueries.push(out.hyde);
-    } catch (err) {
-      logInfo("[queryTranslator] hyde failed: " + (err.message || err));
-    }
-  }
+  // Techniques are independent, so run them concurrently
+  const settled = await Promise.allSettled(techs.map((t) => TECHNIQUES[t](ctx, query, llmOpts)));
 
-  // Chain-of-Thought
-  if (techs.includes("cot")) {
-    try {
-      const cotObj = await cot(query, llmOpts);
-      // cot returns { reasoning, refinedQuery } per our template
-      out.cot = cotObj;
-      if (cotObj && cotObj.refinedQuery) out.subQueries.push(cotObj.refinedQuery);
-    } catch (err) {
-      logInfo("[queryTranslator] cot failed: " + (err.message || err));
+  // Collect in a fixed order so sub-queries are deterministic
+  for (const name of Object.keys(TECHNIQUES)) {
+    const idx = techs.indexOf(name);
+    if (idx === -1) continue;
+    const res = settled[idx];
+    if (res.status === "rejected") {
+      ctx.log(`[queryTranslator] ${name} failed: ${res.reason?.message || res.reason}`);
+      continue;
     }
-  }
-
-  // Step-back (abstract)
-  if (techs.includes("stepback")) {
-    try {
-      const sb = await stepback(query, llmOpts);
-      out.stepback = sb;
-      if (sb && sb.abstractQuery) out.subQueries.push(sb.abstractQuery);
-    } catch (err) {
-      logInfo("[queryTranslator] stepback failed: " + (err.message || err));
-    }
-  }
-
-  // Fan-out -> returns a summary and typically generates sub-questions
-  if (techs.includes("fanout")) {
-    try {
-      const fan = await fanout(query, llmOpts);
-      // fanout returns a summary string in our template; if you later make it return subqueries, adapt accordingly
-      out.fanout = fan;
-      // If fanout produced sub-questions, try to detect them (it may just be a summary string)
-      // For now, we push fanout summary as a retrieval query
-      if (fan) out.subQueries.push(sanitizeText(fan));
-    } catch (err) {
-      logInfo("[queryTranslator] fanout failed: " + (err.message || err));
-    }
+    out[name] = name === "hyde" || name === "fanout" ? sanitizeText(res.value) : res.value;
+    const subQ = toSubQuery[name](out[name]);
+    if (subQ) out.subQueries.push(subQ);
   }
 
   // Always add the original short query as a fallback retrieval item
@@ -84,4 +70,4 @@ async function translate(query, options = {}) {
   return out;
 }
 
-module.exports = { translate };
+module.exports = { translate, TECHNIQUES };
