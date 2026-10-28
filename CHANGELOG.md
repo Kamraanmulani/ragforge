@@ -2,7 +2,7 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-28
 
 ragforge 2 adds tools that tell you which query technique works on your data, and apply it per query.
 
