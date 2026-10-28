@@ -1,7 +1,7 @@
 {
   "name": "ragforge",
   "version": "1.1.0",
-  "description": "Advanced RAG query techniques (HyDE, Chain of Thought, Step-Back, Fan-Out, RRF) with any LLM provider (OpenAI, Ollama) and any vector database. Built-in cost tracking, caching and TypeScript types.",
+  "description": "Find the RAG query technique that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, Chain-of-Thought and RRF, benchmarked on your documents and routed per query, for OpenAI, Ollama and any vector database.",
   "keywords": [
     "rag",
     "genai",
@@ -45,7 +45,8 @@
     "bin/",
     "src/",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"
@@ -53,14 +54,16 @@
   "scripts": {
     "test": "jest tests/unit",
     "test:integration": "jest tests/integration --runInBand",
-    "test:watch": "jest tests/unit --watch"
+    "test:watch": "jest tests/unit --watch",
+    "typecheck": "tsc --noEmit --strict index.d.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
     "openai": "^6.1.0"
   },
   "devDependencies": {
+    "@qdrant/js-client-rest": "^1.15.1",
     "jest": "^30.2.0",
-    "@qdrant/js-client-rest": "^1.15.1"
+    "typescript": "^5.9.3"
   }
 }

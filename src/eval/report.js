@@ -45,7 +45,8 @@ function formatTable(result) {
     line(widths.map((w) => "-".repeat(w))),
     ...rows.map(line),
     "",
-    `★ Recommended: ${result.recommendation.technique}. ${result.recommendation.reason}`,
+    `★ Recommended: ${result.recommendation.technique}`,
+    `  ${result.recommendation.reason}`,
     `Setup: ${setupParts.join(", ")}`,
   ].join("\n");
 }

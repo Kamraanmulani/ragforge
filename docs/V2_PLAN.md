@@ -54,14 +54,34 @@ Not yet verified against a real provider (needs an OpenAI key or a running Ollam
 
 Note: the result keeps the pipeline shape and adds `route`, rather than spreading `technique`/`reason` at the top level as first sketched.
 
-## Phase 4: Release and launch
+## Phase 4: Release and launch (in progress)
 
-1. Bump to `2.0.0`, CHANGELOG with migration notes (mostly none).
-2. Run eval on a public dataset; put the scoreboard in the README.
-3. README hero: GIF of the eval CLI.
-4. Blog post: "I benchmarked 5 RAG query techniques so you don't have to".
-5. Post to r/LocalLLaMA, r/node, Show HN, dev.to, LinkedIn.
-6. GitHub Actions CI + badges.
+| Item | Status |
+|---|---|
+| README rewritten: logo, tagline, badges, eval hero, quick start, eval, routing, techniques, providers, vector stores, API, upgrade guide, FAQ | Done |
+| `assets/logo.svg` (light/dark) and `assets/eval-demo.svg` (terminal hero mirroring real CLI output) | Done |
+| `CHANGELOG.md` with 2.0 migration notes, shipped in the package | Done |
+| GitHub Actions CI (Node 18/20/22: tests, typecheck, CLI smoke, pack) + `npm run typecheck` | Done |
+| One real eval run (OpenAI or Ollama); replace the example numbers in `eval-demo.svg` with real ones | To do |
+| Release (steps below) | To do |
+| Blog post: "I benchmarked 5 RAG query techniques so you don't have to" | To do |
+| Post to r/LocalLLaMA, r/node, Show HN, dev.to, LinkedIn | To do |
+
+### Release checklist
+
+The README loads images from `raw.githubusercontent.com/.../main/assets/`, and the CI badge reads `main`, so merge and push **before** publishing, or npm will show broken images.
+
+```bash
+git checkout main
+git merge --no-ff v2
+git push origin main
+# wait for the CI run on main to pass
+npm version major          # 2.0.0: bumps package.json, commits, tags v2.0.0
+git push origin main --follow-tags
+npm publish
+```
+
+Then set the `[2.0.0] - Unreleased` heading in CHANGELOG.md to the release date (in the same commit as `npm version`, via `git commit --amend`, before pushing) and create a GitHub release from the `v2.0.0` tag with the changelog section as notes.
 
 ## Later (2.x)
 

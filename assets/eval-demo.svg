@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" role="img" aria-label="Example output of npx ragforge eval: a scoreboard of retrieval techniques with a recommendation">
+  <title>npx ragforge eval (example output)</title>
+  <style>
+    text { font: 13.5px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: #c9d1d9; white-space: pre; }
+    .dim { fill: #6e7681; }
+    .prompt { fill: #7ee787; }
+    .cmd { fill: #f0f6fc; font-weight: 600; }
+    .head { fill: #8b949e; font-weight: 600; }
+    .best { fill: #f0f6fc; font-weight: 600; }
+    .star { fill: #fbbf24; }
+    .good { fill: #7ee787; }
+    .accent { fill: #a5b4fc; }
+  </style>
+  <defs>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#9333ea"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="1" y="1" width="898" height="498" rx="14" fill="url(#edge)"/>
+  <rect x="3" y="3" width="894" height="494" rx="12" fill="#0d1117"/>
+  <rect x="3" y="3" width="894" height="40" rx="12" fill="#161b22"/>
+  <rect x="3" y="31" width="894" height="12" fill="#161b22"/>
+  <circle cx="26" cy="23" r="6" fill="#ff5f57"/>
+  <circle cx="46" cy="23" r="6" fill="#febc2e"/>
+  <circle cx="66" cy="23" r="6" fill="#28c840"/>
+  <text x="450" y="27.5" text-anchor="middle" class="dim">ragforge eval</text>
+
+  <text x="28" y="78"><tspan class="prompt">$</tspan> <tspan class="cmd">npx ragforge eval --docs ./docs --questions 20 --techniques baseline,hyde,stepback,fanout,hyde+stepback</tspan></text>
+  <text x="28" y="106" class="dim">Evaluating 14 document(s) with openai...</text>
+  <text x="28" y="126" class="dim">Indexing chunks: 212/212</text>
+  <text x="28" y="146" class="dim">Generating questions: 20/20</text>
+  <text x="28" y="166" class="dim">Running techniques: 100/100</text>
+
+  <text x="28" y="202" class="accent">ragforge eval · 20 questions · top 5 · openai gpt-4o-mini / text-embedding-ada-002</text>
+
+  <text x="28" y="234" class="head">technique         hit@5   MRR     latency   cost/query   LLM calls   errors</text>
+  <text x="28" y="254" class="dim">---------------   -----   -----   -------   ----------   ---------   ------</text>
+  <!-- Name and values drawn separately so the wide ★ glyph can't shift the columns -->
+  <text x="28" y="278"><tspan class="best">hyde+stepback</tspan> <tspan class="star">★</tspan></text>
+  <text x="28" y="278">                  <tspan class="good">87%</tspan>     0.741   3.1s      $0.000210    2</text>
+  <text x="28" y="300">hyde              83%     0.702   2.9s      $0.000190    1</text>
+  <text x="28" y="322">stepback          77%     0.655   0.9s      $0.000020    1</text>
+  <text x="28" y="344">fanout            73%     0.611   1.4s      $0.000050    1</text>
+  <text x="28" y="366">baseline          70%     0.588   180ms     &lt;$0.000001   0</text>
+
+  <text x="28" y="402"><tspan class="star">★</tspan> <tspan class="best">Recommended: hyde+stepback</tspan></text>
+  <text x="28" y="422">  hyde+stepback found the right chunk 87% of the time vs 70% for plain search (+17 points).</text>
+  <text x="28" y="442" class="dim">Setup: 212 chunks indexed, 20 questions, setup cost $0.001900</text>
+
+  <text x="28" y="474"><tspan class="prompt">$</tspan> <tspan class="cmd">▍</tspan></text>
+</svg>
