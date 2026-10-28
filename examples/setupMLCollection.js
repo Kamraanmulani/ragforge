@@ -1,5 +1,5 @@
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('../src/core/openaiClient');
+const { getEmbedding } = require('../index');
 
 const COLLECTION_NAME = 'ml_knowledge';
 

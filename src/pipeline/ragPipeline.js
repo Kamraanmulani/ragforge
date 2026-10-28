@@ -1,14 +1,11 @@
 // combines LLM + vector DB in one flow
-
-// src/pipeline/ragPipeline.js
 const { translate } = require("./queryTranslator");
-const { queryVector, hasVectorClient } = require("../core/vectorClient");
 const { rrf } = require("../techniques/rrf");
-const { callLLM, getEmbedding } = require("../core/openaiClient");
-const { sanitizeText, logInfo } = require("../core/utils");
+const { sanitizeText, extractText } = require("../core/utils");
 
 /**
  * ragPipeline
+ * @param {object} ctx - Call context from createCallContext
  * @param {string} query - user query
  * @param {object} options - {
  *    techniques: ['hyde','cot','fanout',...],
@@ -20,11 +17,11 @@ const { sanitizeText, logInfo } = require("../core/utils");
  *
  * Behavior:
  * - Runs queryTranslator to produce subqueries and technique outputs
- * - If a vector DB client is set, embeds each subquery and queries it
+ * - If a vector store is set, embeds each subquery and queries it (in parallel)
  * - Merge retrieval results using RRF (if multiple result lists)
  * - Use top passages (or HyDE/fanout outputs if no DB) to synthesize final answer via LLM
  */
-async function ragPipeline(query, options = {}) {
+async function ragPipeline(ctx, query, options = {}) {
   const opts = {
     techniques: options.techniques ?? ["hyde", "cot", "fanout"],
     topK: options.topK ?? 5,
@@ -33,51 +30,32 @@ async function ragPipeline(query, options = {}) {
     finalModelOptions: options.finalModelOptions ?? {},
   };
 
-  logInfo("[ragPipeline] Translating query...");
-  const translation = await translate(query, {
+  ctx.log("[ragPipeline] Translating query...");
+  const translation = await translate(ctx, query, {
     techniques: opts.techniques,
     techniqueOptions: opts.techniqueOptions,
   });
 
-  // Attempt retrieval for each subQuery (DB optional)
-  const retrievalLists = []; // each element: array of results for that subquery
-  const subQueries = hasVectorClient() ? translation.subQueries : [];
-  for (const subQ of subQueries) {
-    try {
-      // Same contract as hyde/fanout: the vector client always receives an embedding
-      const vector = await getEmbedding(subQ);
-      const list = await queryVector(vector, opts.topK);
-      // Normalize to an array of { id?, score?, answer?, payload? } - depending on user client
-      if (Array.isArray(list) && list.length > 0) {
-        retrievalLists.push(list);
+  // Retrieve for each subQuery in parallel (DB optional)
+  const subQueries = ctx.hasVectorStore() ? translation.subQueries : [];
+  const lists = await Promise.all(
+    subQueries.map(async (subQ) => {
+      try {
+        // Same contract as hyde/fanout: the vector store always receives an embedding
+        const vector = await ctx.embed(subQ);
+        return await ctx.queryVectors(vector, opts.topK);
+      } catch (err) {
+        ctx.log(`[ragPipeline] Retrieval failed for "${subQ}": ${err.message || err}`);
+        return [];
       }
-    } catch (err) {
-      logInfo(`[ragPipeline] queryVector failed for "${subQ}": ${err.message || err}`);
-      // continue; DB optional
-    }
-  }
+    })
+  );
+  const retrievalLists = lists.filter((list) => Array.isArray(list) && list.length > 0);
 
-  // If we have DB results, merge them using RRF (or simple concat otherwise)
   let mergedIdsOrDocs = [];
   if (retrievalLists.length > 0) {
-    // rrf expects arrays of ranked items. Different providers return different shapes.
-    // For robust handling, we map each result list into strings (prefer content fields)
-    const rankedListsForRRF = retrievalLists.map((lst) =>
-      lst.map((item) => {
-        // try to extract a text field
-        if (typeof item === "string") return item;
-        if (item.content) return item.content;
-        if (item.answer) return item.answer;
-        if (item.payload && item.payload.text) return item.payload.text;
-        if (item.payload && item.payload.content) return item.payload.content;
-        if (item.payload) return JSON.stringify(item.payload);
-        // fallback to id or stringified item
-        return item.id ? String(item.id) : JSON.stringify(item);
-      })
-    );
-
-    // Use RRF to merge and get ranked strings
-    const merged = rrf(rankedListsForRRF);
+    // Different stores return different shapes; RRF merges on the extracted text
+    const merged = rrf(retrievalLists.map((lst) => lst.map(extractText)));
     mergedIdsOrDocs = merged.slice(0, opts.rerankK);
   } else {
     // No DB results — build context from HyDE / Fanout / Cot outputs
@@ -106,8 +84,8 @@ async function ragPipeline(query, options = {}) {
     ""
   ].join("\n");
 
-  logInfo("[ragPipeline] Synthesizing final answer via LLM...");
-  const finalAnswer = await callLLM(synthesisPrompt, opts.finalModelOptions);
+  ctx.log("[ragPipeline] Synthesizing final answer via LLM...");
+  const finalAnswer = await ctx.chat(synthesisPrompt, opts.finalModelOptions);
 
   return {
     query,

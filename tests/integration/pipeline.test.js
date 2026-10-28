@@ -1,6 +1,6 @@
 // Tests for RAG pipeline
 
-const { ragPipeline, setVectorClient } = require('../index');
+const { ragPipeline, setVectorClient } = require('../../index');
 const { QdrantClient } = require('@qdrant/js-client-rest');
 
 const COLLECTION_NAME = 'ml_knowledge';

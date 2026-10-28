@@ -1,24 +1,36 @@
-// Indexjs Main file 
-
-// index.js
-const { hyde } = require("./src/techniques/hyde");
-const { cot } = require("./src/techniques/cot");
-const { stepback } = require("./src/techniques/stepback");
+// ragforge entry point
+//
+// v2: create configured instances with createRagforge({ llm, vectorStore, cache, ... }).
+// The top-level functions below are the v1 API, kept working through a lazily
+// created default instance (OpenAI, key from OPENAI_API_KEY).
+const { createRagforge } = require("./src/createRagforge");
+const { createOpenAIProvider, createOllamaProvider } = require("./src/providers");
+const { createMemoryCache } = require("./src/core/cache");
+const { DEFAULT_PRICING } = require("./src/core/pricing");
 const { rrf } = require("./src/techniques/rrf");
-const { fanout } = require("./src/techniques/fanout");
-const { setVectorClient } = require("./src/core/vectorClient");
-const { ragPipeline } = require("./src/pipeline/ragPipeline");
-const { callLLM, getEmbedding, setOpenAIClient } = require("./src/core/openaiClient");
+
+let defaultInstance = null;
+const getDefault = () => (defaultInstance ??= createRagforge());
 
 module.exports = {
-  hyde,
-  cot,
-  stepback,
+  // v2 API
+  createRagforge,
+  createOpenAIProvider,
+  createOllamaProvider,
+  createMemoryCache,
+  DEFAULT_PRICING,
+
+  // v1 API (default instance)
+  hyde: (query, options) => getDefault().hyde(query, options),
+  cot: (query, options) => getDefault().cot(query, options),
+  stepback: (query, options) => getDefault().stepback(query, options),
+  fanout: (query, options) => getDefault().fanout(query, options),
+  ragPipeline: (query, options) => getDefault().ragPipeline(query, options),
   rrf,
-  fanout,
-  setVectorClient,
-  ragPipeline,
-  callLLM,
-  getEmbedding,
-  setOpenAIClient
+  setVectorClient: (client) => getDefault().setVectorStore(client),
+  callLLM: (prompt, options) => getDefault().callLLM(prompt, options),
+  // v1 signature was getEmbedding(text, model)
+  getEmbedding: (text, modelOrOptions) =>
+    getDefault().getEmbedding(text, typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions),
+  setOpenAIClient: (client) => getDefault().llm.setClient(client),
 };

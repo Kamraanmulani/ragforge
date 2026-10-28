@@ -1,4 +1,4 @@
-const { callLLM } = require("../src/core/openaiClient");
+const { callLLM } = require("../index");
 
 (async () => {
   try {

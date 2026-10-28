@@ -1,7 +1,7 @@
 // examples/testWithDB.js
 const { hyde, setVectorClient } = require("../index");
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { getEmbedding } = require('../src/core/openaiClient');
+const { getEmbedding } = require('../index');
 
 const COLLECTION_NAME = 'ml_knowledge';
 const qdrant = new QdrantClient({ url: 'http://localhost:6333' });

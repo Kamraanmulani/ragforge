@@ -1,6 +1,6 @@
 // Tests for Step-Back Prompting technique
 
-const { stepback } = require('../index');
+const { stepback } = require('../../index');
 
 describe('Step-Back Prompting Technique', () => {
   test('should generate abstract version of specific query', async () => {

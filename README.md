@@ -51,6 +51,7 @@ Building RAG systems with advanced techniques is **hard**:
 - [Features](#-features)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
+- [Instances, Providers, Cost & Caching](#%EF%B8%8F-instances-providers-cost--caching)
 - [Core Concepts](#-core-concepts)
 - [Available Techniques](#-available-techniques)
 - [API Reference](#-api-reference)
@@ -74,9 +75,12 @@ Building RAG systems with advanced techniques is **hard**:
 | 🌟 **Fan-Out** | Generate multiple query variations for comprehensive coverage |
 | � **RAG Pipeline** | Complete end-to-end RAG workflow with technique orchestration |
 | 🔌 **Database Agnostic** | Works with any vector database (Qdrant, Pinecone, Weaviate, etc.) |
-| 🤖 **LLM Agnostic** | Compatible with OpenAI, Anthropic, or custom LLM providers |
+| 🤖 **LLM Agnostic** | OpenAI and Ollama (local, free) built in, or plug in any provider |
+| 💰 **Cost Tracking** | Every pipeline call reports LLM calls, tokens, USD cost and latency |
+| ⚡ **Fast & Cached** | Techniques run in parallel; optional cache makes repeat calls free |
 | 📦 **Minimal Setup** | Works out of the box with sensible defaults |
-| 🧪 **Well Tested** | Comprehensive test coverage for production use |
+| 🟦 **TypeScript Types** | Full type definitions included |
+| 🧪 **Well Tested** | Unit tests run without network calls; integration tests against real APIs |
 
 ---
 
@@ -87,8 +91,8 @@ npm install ragforge
 ```
 
 **Requirements:**
-- Node.js 14.x or higher
-- An LLM API key (OpenAI, Anthropic, etc.)
+- Node.js 18 or higher
+- An OpenAI API key, or a local [Ollama](https://ollama.com) server
 - Vector database (optional but recommended)
 
 ---
@@ -171,6 +175,82 @@ console.log('Answer:', result.answer);
 console.log('Retrieved docs:', result.retrieved);
 console.log('Translation:', result.translation);
 ```
+
+---
+
+## ⚙️ Instances, Providers, Cost & Caching
+
+The top-level functions above use a default OpenAI instance. For anything else, create your own instance with `createRagforge`:
+
+```javascript
+const { createRagforge } = require('ragforge');
+
+const rf = createRagforge({
+  llm: 'openai',            // 'openai' (default), 'ollama', or your own provider object
+  vectorStore: {            // optional, same shape as setVectorClient
+    query: async (vector, topK) => [/* { content, score } */]
+  },
+  cache: true,              // optional in-memory cache, or any { get, set } (e.g. Redis)
+  defaults: { model: 'gpt-4o-mini', temperature: 0.3 },
+  debug: true               // log progress (silent by default)
+});
+
+const result = await rf.ragPipeline('What is overfitting?', { techniques: ['hyde', 'stepback'] });
+
+console.log(result.answer);
+console.log(result.stats);
+// { llmCalls: 4, embeddingCalls: 3, cacheHits: 0, inputTokens: 2310,
+//   outputTokens: 640, costUSD: 0.000731, latencyMs: 2140 }
+```
+
+Every instance method (`hyde`, `cot`, `stepback`, `fanout`, `translate`, `ragPipeline`, `callLLM`, `getEmbedding`) works like the top-level version. Each accepts an `onStats` callback to get the same usage stats:
+
+```javascript
+await rf.hyde('Explain transformers', { onStats: (s) => console.log(s.costUSD) });
+```
+
+### Run locally and free with Ollama
+
+```javascript
+const rf = createRagforge({ llm: 'ollama' }); // http://localhost:11434, llama3.1 + nomic-embed-text
+
+// Or choose models / server
+const { createOllamaProvider } = require('ragforge');
+const rf2 = createRagforge({
+  llm: createOllamaProvider({ chatModel: 'qwen2.5', embeddingModel: 'nomic-embed-text', baseURL: 'http://gpu-box:11434' })
+});
+```
+
+Ollama calls report `costUSD: 0`. You can also mix providers, e.g. Ollama for chat and OpenAI for embeddings: `createRagforge({ llm: 'ollama', embeddings: 'openai' })`. Your vector store must have been built with the same embedding model you query with.
+
+### Bring your own provider
+
+Any object with `chat` and `embed` works:
+
+```javascript
+const myProvider = {
+  name: 'my-llm',
+  chatModel: 'my-model',
+  embeddingModel: 'my-embedder',
+  async chat({ prompt, model, temperature, maxTokens }) {
+    // call your API
+    return { text: '...', usage: { inputTokens: 10, outputTokens: 20 } };
+  },
+  async embed({ text, model }) {
+    return { vector: [/* numbers */], usage: { inputTokens: 5 } };
+  }
+};
+
+const rf = createRagforge({ llm: myProvider, pricing: { 'my-model': { input: 1, output: 3 } } });
+```
+
+### Cost tracking
+
+`costUSD` uses a built-in price table (USD per 1M tokens, exported as `DEFAULT_PRICING`) covering common OpenAI models. Dated snapshots like `gpt-4o-mini-2024-07-18` match their base model. If a model isn't in the table, `costUSD` is `null`; add it with the `pricing` option. Prices change, so check your provider's pricing page.
+
+### Caching
+
+`cache: true` keeps up to 1000 LLM and embedding responses in memory (least recently used are evicted). Identical prompts with identical options are served from the cache and count as `cacheHits` with no cost. Pass your own `{ get(key), set(key, value) }` object to use Redis or another store.
 
 ---
 
@@ -415,7 +495,8 @@ console.log('Query Translation:', result.translation);
     subQueries: ["query1", "query2", ...]
   },
   retrieved: ["doc1", "doc2", ...],
-  answer: "synthesized final answer"
+  answer: "synthesized final answer",
+  stats: { llmCalls, embeddingCalls, cacheHits, inputTokens, outputTokens, costUSD, latencyMs }
 }
 ```
 
@@ -546,7 +627,7 @@ const answer = await hyde(query, options);
 **Parameters:**
 - `query` (string): User's question or query
 - `options` (object, optional): LLM configuration
-  - `model` (string): LLM model to use (default: "gpt-4")
+  - `model` (string): LLM model to use (default: "gpt-4o-mini")
   - `temperature` (number): Randomness (0-1, default: 0.7)
   - `max_tokens` (number): Maximum response length (default: 500)
 
@@ -1105,11 +1186,10 @@ setOpenAIClient(new OpenAI({ apiKey: 'sk-...', baseURL: 'https://my-proxy/v1' })
 
 ### Default Settings
 
-ragforge uses sensible defaults that work for most use cases. You can find them in `src/config/defaults.js`:
+ragforge uses sensible defaults that work for most use cases. The model comes from the provider (OpenAI: `gpt-4o-mini`, embeddings: `text-embedding-ada-002`; Ollama: `llama3.1`, `nomic-embed-text`). Other defaults, which you can override with `createRagforge({ defaults })`:
 
 ```javascript
 {
-  model: "gpt-4",              // LLM model
   temperature: 0.7,            // Randomness (0-1)
   maxTokens: 500,              // Max response length
   topP: 1,                     // Nucleus sampling
@@ -1194,7 +1274,7 @@ setVectorClient({
 
 ### Docker Setup (Qdrant)
 
-Use the included `docker-compose.yml`:
+Use `examples/docker-compose.yml` from the repository:
 
 ```yaml
 version: '3.8'
@@ -1219,31 +1299,20 @@ docker-compose up -d
 
 ## 🧪 Testing
 
-ragforge includes comprehensive test coverage for all techniques.
-
 ### Run Tests
 
 ```bash
-# Run all tests
+# Unit tests: fast, no API key or database needed
 npm test
 
-# Run tests in watch mode
+# Unit tests in watch mode
 npm run test:watch
 
-# Run specific test file
-npm test hyde.test.js
+# Integration tests: real OpenAI calls (costs money) + Qdrant on localhost:6333
+npm run test:integration
 ```
 
-### Test Coverage
-
-```
-✓ HyDE technique
-✓ Chain of Thought
-✓ Step-Back Prompting
-✓ Reciprocal Rank Fusion
-✓ Fan-Out Retrieval
-✓ RAG Pipeline integration
-```
+Unit tests use a fake provider, so they cover techniques, the pipeline, stats, caching, providers and the v1 API without any network calls.
 
 ### Writing Your Own Tests
 
@@ -1267,9 +1336,16 @@ describe('HyDE Tests', () => {
 ```
 ragforge/
 ├── src/
+│   ├── createRagforge.js        # Instance factory
+│   ├── providers/
+│   │   ├── openai.js            # OpenAI adapter
+│   │   └── ollama.js            # Ollama adapter (local models)
+│   │
 │   ├── core/
-│   │   ├── openaiClient.js      # LLM API integration (OpenAI)
-│   │   ├── vectorClient.js      # Vector DB abstraction layer
+│   │   ├── context.js           # Per-call LLM/embedding/vector access
+│   │   ├── stats.js             # Usage and cost tracking
+│   │   ├── pricing.js           # Model price table
+│   │   ├── cache.js             # Response cache
 │   │   └── utils.js             # Utility functions (logging, sanitization)
 │   │
 │   ├── techniques/
@@ -1296,16 +1372,12 @@ ragforge/
 │   └── testWithDB.js            # Database integration
 │
 ├── tests/
-│   ├── hyde.test.js             # HyDE tests
-│   ├── cot.test.js              # CoT tests
-│   ├── stepback.test.js         # Step-Back tests
-│   ├── rrf.test.js              # RRF tests
-│   ├── fanout.test.js           # Fan-Out tests
-│   └── pipeline.test.js         # Pipeline tests
+│   ├── unit/                    # Mocked tests (npm test)
+│   └── integration/             # Real API + Qdrant tests (npm run test:integration)
 │
 ├── index.js                     # Main entry point
+├── index.d.ts                   # TypeScript definitions
 ├── package.json                 # Package configuration
-├── docker-compose.yml           # Qdrant Docker setup
 └── README.md                    # Documentation
 ```
 
@@ -1319,12 +1391,7 @@ ragforge/
 
 ### Q: Can I use ragforge with other LLM providers?
 
-**A:** Currently, ragforge uses OpenAI's API. However, you can easily extend `src/core/openaiClient.js` to work with:
-- Anthropic Claude
-- Google Gemini
-- Azure OpenAI
-- Local models (Ollama, LM Studio)
-- Custom API endpoints
+**A:** Yes. OpenAI and Ollama are built in (`createRagforge({ llm: 'ollama' })`). OpenAI-compatible endpoints (Azure OpenAI, LM Studio, proxies) work through `createOpenAIProvider({ baseURL, apiKey })`. For anything else, such as Anthropic Claude or Google Gemini, pass a provider object with `chat` and `embed` methods. See [Bring your own provider](#bring-your-own-provider).
 
 ### Q: Which technique should I use?
 

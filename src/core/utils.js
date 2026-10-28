@@ -1,12 +1,4 @@
-// helper functions (logging, error handling, text cleaning)
-
-/**
- * logInfo
- * Simple console logging
- */
-function logInfo(message) {
-  console.log("[ragify INFO]", message);
-}
+// helper functions (logging, text cleaning, result extraction)
 
 /**
  * sanitizeText
@@ -18,11 +10,33 @@ function sanitizeText(text) {
 }
 
 /**
- * handleError
- * Standardized error logging
+ * extractText
+ * Pulls the text out of a vector DB result, whatever shape the user's client returns
  */
-function handleError(err) {
-  console.error("[ragify ERROR]", err.message || err);
+function extractText(item) {
+  if (typeof item === "string") return item;
+  if (item.content) return item.content;
+  if (item.answer) return item.answer;
+  if (item.payload && item.payload.text) return item.payload.text;
+  if (item.payload && item.payload.content) return item.payload.content;
+  if (item.payload) return JSON.stringify(item.payload);
+  return item.id ? String(item.id) : JSON.stringify(item);
 }
 
-module.exports = { logInfo, sanitizeText, handleError };
+const silentLogger = { info() {}, error() {} };
+
+const consoleLogger = {
+  info: (msg) => console.log("[ragforge]", msg),
+  error: (msg) => console.error(msg),
+};
+
+/**
+ * resolveLogger
+ * Silent by default; `debug: true` logs to console; a custom { info, error } wins
+ */
+function resolveLogger(logger, debug) {
+  if (logger) return { ...silentLogger, ...logger };
+  return debug ? consoleLogger : silentLogger;
+}
+
+module.exports = { sanitizeText, extractText, resolveLogger };
