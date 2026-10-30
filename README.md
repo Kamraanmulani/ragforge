@@ -27,7 +27,7 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 <br>
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/Kamraanmulani/ragforge/main/assets/eval-demo.svg" alt="npx ragforge eval prints a scoreboard of techniques and recommends one" width="860">
+<img src="https://raw.githubusercontent.com/Kamraanmulani/ragforge/main/assets/eval-demo.gif" alt="Animated terminal: npx ragforge eval runs on 12 npm READMEs, prints a scoreboard of techniques and recommends plain search" width="860">
 <br>
 <sub>A real run on 12 popular npm package READMEs (30 queries, gpt-4o-mini, total cost 3 cents). On these docs, plain search matched or beat every technique, and HyDE cost 350× more per query while finding the right chunk less often. Your data may say otherwise. That's why you measure.</sub>
 </div>
