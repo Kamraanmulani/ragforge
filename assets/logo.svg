@@ -1,12 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="480" height="112" viewBox="0 0 480 112" role="img" aria-label="ragforge">
   <title>ragforge</title>
+  <!-- One set of colors for every background: pages like npm stay white even when
+       the OS is in dark mode, so prefers-color-scheme can't be trusted here.
+       Both colors keep 3:1+ contrast on white and on GitHub's dark #0d1117. -->
   <style>
-    .word { fill: #111827; font: 700 54px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: -1.5px; }
-    .forge { fill: #4f46e5; }
-    @media (prefers-color-scheme: dark) {
-      .word { fill: #f9fafb; }
-      .forge { fill: #a5b4fc; }
-    }
+    .word { fill: #6366f1; font: 700 54px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: -1.5px; }
+    .forge { fill: #a855f7; }
   </style>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
