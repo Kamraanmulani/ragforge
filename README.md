@@ -108,7 +108,7 @@ npx ragforge eval --docs ./docs
 1. **Index.** Reads `.txt`, `.md`, `.mdx` and `.rst` files, splits them into chunks and embeds them into an in-memory store.
 2. **Generate questions.** The LLM writes a test query for chunks spread across your documents, mixing three styles real users have: full questions, short keyword searches and vague *why/how* questions. The chunk it came from is the right answer. Queries that only make sense next to the passage ("the function described…") are thrown out and replaced.
 3. **Run.** Every technique runs on every question, and ragforge checks whether it retrieved that chunk in the top *k*.
-4. **Score and recommend.** You get hit@k, MRR, latency, cost per query and LLM calls for each technique. A technique has to beat plain search by **5 points** to be recommended.
+4. **Score and recommend.** You get hit@k, MRR, latency, cost per query and LLM calls for each technique. A technique that adds LLM calls has to beat plain search by **5 points** to be recommended. Hybrid search adds none, so it only has to rank higher.
 
 | Option | Default | |
 |---|---|---|
@@ -116,11 +116,13 @@ npx ragforge eval --docs ./docs
 | `--questions <n>` | `10` | Questions to generate |
 | `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]` |
 | `--question-styles <list>` | `question,keywords,conceptual` | Which generated query styles to mix |
-| `--techniques <list>` | `baseline,hyde,stepback,fanout` | Also `cot`; combine with `+`, e.g. `hyde+stepback` |
+| `--techniques <list>` | `baseline,hybrid,hyde,stepback,fanout` | Also `cot`; combine with `+`, e.g. `hybrid+hyde` |
 | `--provider <name>` | `openai` | `openai` or `ollama` |
 | `--embeddings <name>` | same as provider | Mix providers |
 | `--model <name>` | provider default | Chat model |
 | `--embedding-model <name>` | provider default | Embedding model |
+| `--reranker <name>` | | `llm`, `cohere` or `jina`; adds `rerank` and `hybrid+rerank` to the techniques |
+| `--rerank-candidates <n>` | `20` | Candidates retrieved before reranking |
 | `--top-k <n>` | `5` | Results per search |
 | `--chunk-size <n>` | `800` | Max characters per chunk |
 | `--concurrency <n>` | `4` | Parallel requests |
@@ -139,7 +141,7 @@ const rf = createRagforge();
 
 const result = await rf.evaluate({
   documents: [{ id: 'handbook.md', content: handbookText }],
-  techniques: ['baseline', 'hyde', 'stepback', 'fanout', 'hyde+stepback'],
+  techniques: ['baseline', 'hybrid', 'hyde', 'stepback', 'hybrid+hyde'],
   numQuestions: 20,
 });
 
@@ -196,6 +198,8 @@ await rf.auto(query, { rules: { short: 'hyde+stepback' } });  // change a catego
 
 | Technique | What it does | Best for | LLM calls* |
 |---|---|---|---|
+| **Hybrid** | Adds a BM25 keyword search for the query and fuses it with vector search | Error codes, names, IDs, exact terms | 0 |
+| **Rerank** | Retrieves 20 candidates, then a reranker picks the best *k* | The right chunk is retrieved but ranked too low | 0 (1 with the `llm` reranker), plus 1 reranker call |
 | **HyDE** | Writes a hypothetical answer and searches with *that* | Short or vague queries | 1, or 2 with a vector store |
 | **Step-Back** | Rewrites the question into a broader, principle-level one | Specific *why/how* questions | 2 |
 | **Fan-Out** | Splits the query into 3 sub-questions and searches each | Comparisons, multi-part questions | 2 |
@@ -203,7 +207,44 @@ await rf.auto(query, { rules: { short: 'hyde+stepback' } });  // change a catego
 | **RRF** | Merges several ranked result lists into one | Combining searches | 0 |
 | **Pipeline** | Runs techniques in parallel, retrieves, fuses with RRF, writes the answer | End-to-end RAG | techniques + 1 |
 
-<sub>* When the technique is called on its own. In the eval, techniques only build search queries, so each costs 1 call: Step-Back searches with the broader question plus the original, Fan-Out with the sub-questions plus the original.</sub>
+<sub>* When the technique is called on its own. In the eval, techniques only build search queries, so each costs 1 call: Step-Back searches with the broader question plus the original, Fan-Out with the sub-questions plus the original. Hybrid combines with any of them (`hybrid+hyde`) and adds the original question to both vector and keyword search.</sub>
+
+### Hybrid search
+
+Embeddings are good at meaning and bad at exact strings like `E_CONNRESET`, `maxTokens` or a product SKU. Hybrid search runs a BM25 keyword search next to the vector search and merges both with RRF. It costs no LLM calls, and the eval tells you whether it actually helps on your data. On some corpora it doesn't.
+
+```js
+await rf.ragPipeline(query, { hybrid: true });      // per call
+createRagforge({ vectorStore, hybrid: true });      // as the default
+await rf.auto(query, { from: evalResult });         // on when the eval picked a hybrid technique
+```
+
+The keyword search comes from the vector store's optional `searchText(text, topK)` method. `createMemoryVectorStore()` has one built in, using ragforge's zero-dependency BM25 index. For your own database, see [Vector stores](#vector-stores).
+
+### Reranking
+
+Vector search ranks by similarity, which isn't the same as "answers the question". A reranker reads the query and each candidate together and re-scores them. ragforge retrieves a deeper pool (`rerankK`, default 20), reranks it and keeps the top *k*.
+
+```js
+const rf = createRagforge({ vectorStore, reranker: 'cohere' });  // COHERE_API_KEY
+
+await rf.ragPipeline(query, { rerank: true });                   // per call
+createRagforge({ vectorStore, reranker: 'cohere', rerank: true }); // as the default
+await rf.auto(query, { from: evalResult });                      // on when the eval picked a rerank technique
+```
+
+```bash
+npx ragforge eval --docs ./docs --reranker cohere   # adds rerank and hybrid+rerank to the scoreboard
+```
+
+| Reranker | | Cost |
+|---|---|---|
+| `'cohere'` | Cohere `rerank-v3.5`, key from `COHERE_API_KEY` | about $0.002 per search, tracked in `stats` |
+| `'jina'` | Jina `jina-reranker-v2-base-multilingual`, key from `JINA_API_KEY` | token-based; add its price via `pricing` to see it in `stats` |
+| `'llm'` | Your chat model ranks the candidates in one call | one LLM call per query |
+| your own | Any `{ name, model, rerank({ query, documents, topN }) }` returning `{ results: [{ index, score }] }` | |
+
+Use `createCohereReranker({ apiKey, model })`, `createJinaReranker(...)` or `createLLMReranker({ maxChars })` for custom settings. Reranking adds a call and some latency, so like the query techniques it has to beat plain search by 5 points before the eval recommends it.
 
 ```js
 const { hyde, cot, stepback, fanout, rrf, ragPipeline } = require('ragforge');
@@ -305,6 +346,33 @@ async query(vector, topK) {
 
 </details>
 
+<details>
+<summary><b>Hybrid search with your own store</b></summary>
+
+Add `searchText(text, topK)` and return the same shape as `query`. Use your database's full-text search, or ragforge's BM25 index if your corpus fits in memory:
+
+```js
+// Postgres full-text search next to pgvector
+async searchText(text, topK) {
+  const { rows } = await pool.query(
+    `SELECT id, content, ts_rank(tsv, q) AS score FROM docs, plainto_tsquery('english', $1) q
+     WHERE tsv @@ q ORDER BY score DESC LIMIT $2`,
+    [text, topK]
+  );
+  return rows;
+}
+
+// Or ragforge's in-memory BM25 index
+const { createBM25Index } = require('ragforge');
+const bm25 = createBM25Index();
+bm25.add(chunks); // [{ id, content }]
+const store = { query: myVectorQuery, searchText: async (text, topK) => bm25.search(text, topK) };
+```
+
+Return the same `id` from both methods, so results found by both searches merge into one.
+
+</details>
+
 Without a vector store, techniques still work: HyDE returns its hypothetical document, and the pipeline answers from the technique outputs. No embedding calls are made.
 
 ## Cost, caching and logging
@@ -334,7 +402,10 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 |---|---|---|
 | `llm` | `'openai'` \| `'ollama'` \| provider | `'openai'` |
 | `embeddings` | `'openai'` \| `'ollama'` \| provider | same as `llm` |
-| `vectorStore` | `{ query(vector, topK) }` | none |
+| `vectorStore` | `{ query(vector, topK), searchText?(text, topK) }` | none |
+| `hybrid` | `boolean`, default for `ragPipeline` and `auto` | `false` |
+| `reranker` | `'llm'` \| `'cohere'` \| `'jina'` \| reranker | none |
+| `rerank` | `boolean`, default for `ragPipeline` and `auto` | `false` |
 | `cache` | `boolean` \| `{ get, set }` | `false` |
 | `pricing` | `{ [model]: { input, output } }` | `DEFAULT_PRICING` |
 | `defaults` | LLM options | `{ temperature: 0.7, maxTokens: 500 }` |
@@ -359,16 +430,16 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | `rrf(lists, k = 60)` | Merged ranking |
 | `setVectorStore(store)` | |
 
-**Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `techniqueOptions`, `finalModelOptions`, `onStats`.
+**Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createMemoryVectorStore`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

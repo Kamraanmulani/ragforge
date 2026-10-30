@@ -19,7 +19,12 @@ Options:
   --questions-file <file>   JSON array of { question, expectedText } to use instead
   --question-styles <list>  Generated mix (default question,keywords,conceptual)
   --techniques <list>       Comma-separated (default ${DEFAULT_TECHNIQUES.join(",")})
-                            Available: baseline, hyde, cot, stepback, fanout; combine with +
+                            Available: baseline, hybrid, rerank, hyde, cot, stepback, fanout;
+                            combine with + (hybrid adds BM25 keyword search,
+                            rerank needs --reranker)
+  --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
+                            adds rerank and hybrid+rerank to the default techniques
+  --rerank-candidates <n>   Candidates retrieved before reranking (default 20)
   --provider <name>         openai (default) or ollama
   --embeddings <name>       Embedding provider (default: same as --provider)
   --model <name>            Chat model (default: provider default)
@@ -34,7 +39,8 @@ Options:
 Examples:
   npx ragforge eval --docs ./docs
   npx ragforge eval --docs ./docs --provider ollama --model qwen2.5 --html report.html
-  npx ragforge eval --docs notes.md --techniques baseline,hyde,hyde+stepback --questions 30
+  npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
+  npx ragforge eval --docs ./docs --reranker cohere
 `;
 
 function collectFiles(target) {
@@ -110,6 +116,8 @@ async function main(argv, io = {}) {
         embeddings: { type: "string" },
         model: { type: "string" },
         "embedding-model": { type: "string" },
+        reranker: { type: "string" },
+        "rerank-candidates": { type: "string" },
         "top-k": { type: "string" },
         "chunk-size": { type: "string" },
         concurrency: { type: "string" },
@@ -148,6 +156,7 @@ async function main(argv, io = {}) {
     const rf = factory({
       llm: makeProvider(values.provider, { chatModel: values.model }),
       embeddings: makeProvider(embeddingsName, { embeddingModel: values["embedding-model"] }),
+      reranker: values.reranker,
     });
 
     const techniques = values.techniques ? values.techniques.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
@@ -163,6 +172,7 @@ async function main(argv, io = {}) {
       numQuestions: toInt(values.questions, "questions"),
       questionStyles: values["question-styles"] ? values["question-styles"].split(",").map((s) => s.trim()).filter(Boolean) : undefined,
       topK: toInt(values["top-k"], "top-k"),
+      rerankCandidates: toInt(values["rerank-candidates"], "rerank-candidates"),
       chunkSize: toInt(values["chunk-size"], "chunk-size"),
       concurrency: toInt(values.concurrency, "concurrency"),
       onProgress: ({ phase, done, total }) => {

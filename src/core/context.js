@@ -80,11 +80,46 @@ function createCallContext(config, tracker = createTracker(config.pricing)) {
     return (await config.vectorStore.query(vector, topK)) ?? [];
   }
 
+  function hasReranker() {
+    return Boolean(config.reranker);
+  }
+
+  /**
+   * rerank
+   * Returns the documents' indices, most relevant first
+   */
+  async function rerank(query, documents, topN = documents.length) {
+    if (documents.length <= 1) return documents.map((_, i) => i);
+    let result;
+    try {
+      result = await config.reranker.rerank({ query, documents, topN, chat });
+    } catch (err) {
+      logger.error(`[ragforge] Rerank failed: ${err.message || err}`);
+      throw err;
+    }
+    tracker.recordRerank(config.reranker, result.usage);
+    return result.results.map((r) => r.index);
+  }
+
+  // Keyword search for hybrid retrieval; stores opt in by implementing searchText()
+  function hasTextSearch() {
+    return typeof config.vectorStore?.searchText === "function";
+  }
+
+  async function searchText(text, topK) {
+    if (!hasTextSearch()) return [];
+    return (await config.vectorStore.searchText(text, topK)) ?? [];
+  }
+
   return {
     chat,
     embed,
     hasVectorStore,
     queryVectors,
+    hasTextSearch,
+    searchText,
+    hasReranker,
+    rerank,
     log: (msg) => logger.info(msg),
     tracker,
   };

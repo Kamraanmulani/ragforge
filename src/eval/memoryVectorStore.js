@@ -1,4 +1,5 @@
 // In-memory vector store (cosine similarity), so eval needs no database
+const { createBM25Index } = require("./bm25");
 
 function norm(v) {
   let sum = 0;
@@ -9,9 +10,11 @@ function norm(v) {
 /**
  * createMemoryVectorStore
  * Brute-force search; fine for evals and small corpora (thousands of chunks).
+ * Also keeps a BM25 keyword index, so it supports hybrid search via searchText().
  */
 function createMemoryVectorStore() {
   const items = [];
+  const keywords = createBM25Index();
 
   return {
     /**
@@ -19,6 +22,7 @@ function createMemoryVectorStore() {
      */
     add(entries) {
       for (const e of entries) items.push({ ...e, norm: norm(e.vector) });
+      keywords.add(entries);
     },
 
     async query(vector, topK = 5) {
@@ -32,6 +36,11 @@ function createMemoryVectorStore() {
         })
         .sort((a, b) => b.score - a.score)
         .slice(0, topK);
+    },
+
+    // Keyword (BM25) search, used for hybrid retrieval
+    async searchText(text, topK = 5) {
+      return keywords.search(text, topK);
     },
 
     get size() {
