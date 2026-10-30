@@ -4,6 +4,33 @@ const { rrf } = require("../techniques/rrf");
 const { sanitizeText, extractText } = require("../core/utils");
 
 /**
+ * citedRefs
+ * Passage numbers the answer cites: [1], [2][3], [1, 2] and [1-3] all count.
+ * Numbers outside 1..count are ignored.
+ */
+function citedRefs(answer, count) {
+  const refs = new Set();
+  for (const [, inside] of String(answer).matchAll(/\[(\d+(?:\s*[,–-]\s*\d+)*)\]/g)) {
+    for (const part of inside.split(",")) {
+      const [from, to = from] = part.split(/[–-]/).map((n) => Number(n.trim()));
+      for (let n = from; n <= Math.min(to, from + 50); n++) if (n >= 1 && n <= count) refs.add(n);
+    }
+  }
+  return [...refs].sort((a, b) => a - b);
+}
+
+function toSource(text, item, ref) {
+  const obj = item && typeof item === "object" ? item : {};
+  return {
+    ref,
+    id: obj.id ?? obj.payload?.id ?? null,
+    content: text,
+    score: typeof obj.score === "number" ? obj.score : null,
+    metadata: obj.metadata ?? null,
+  };
+}
+
+/**
  * ragPipeline
  * @param {object} ctx - Call context from createCallContext
  * @param {string} query - user query
@@ -13,6 +40,7 @@ const { sanitizeText, extractText } = require("../core/utils");
  *    rerankK: number,
  *    hybrid: boolean, // also keyword-search the query (store needs searchText)
  *    rerank: boolean, // retrieve rerankK candidates, then reorder them with the instance reranker
+ *    citations: boolean, // ask the LLM to cite passages as [1], [2] (default true)
  *    techniqueOptions: { model, temperature, max_tokens, ... },
  *    finalModelOptions: { model, temperature, max_tokens, ... }
  * }
@@ -24,6 +52,7 @@ const { sanitizeText, extractText } = require("../core/utils");
  * - Merge retrieval results using RRF (if multiple result lists)
  * - With rerank, reorder the merged candidates with the reranker
  * - Use top passages (or HyDE/fanout outputs if no DB) to synthesize final answer via LLM
+ * - Return the passages used as numbered `sources`, and which of them the answer cites
  */
 async function ragPipeline(ctx, query, options = {}) {
   const opts = {
@@ -32,6 +61,7 @@ async function ragPipeline(ctx, query, options = {}) {
     rerankK: options.rerankK ?? 20,
     hybrid: options.hybrid ?? false,
     rerank: options.rerank ?? false,
+    citations: options.citations ?? true,
     techniqueOptions: options.techniqueOptions ?? {},
     finalModelOptions: options.finalModelOptions ?? {},
   };
@@ -75,9 +105,19 @@ async function ragPipeline(ctx, query, options = {}) {
   const retrievalLists = lists.filter((list) => Array.isArray(list) && list.length > 0);
 
   let mergedIdsOrDocs = [];
+  // First result object seen for each text, so sources keep their id, score and metadata
+  const itemsByText = new Map();
   if (retrievalLists.length > 0) {
     // Different stores return different shapes; RRF merges on the extracted text
-    const merged = rrf(retrievalLists.map((lst) => lst.map(extractText)));
+    const merged = rrf(
+      retrievalLists.map((lst) =>
+        lst.map((item) => {
+          const text = extractText(item);
+          if (!itemsByText.has(text)) itemsByText.set(text, item);
+          return text;
+        })
+      )
+    );
     mergedIdsOrDocs = merged.slice(0, opts.rerankK);
     if (opts.rerank) {
       try {
@@ -95,8 +135,15 @@ async function ragPipeline(ctx, query, options = {}) {
     mergedIdsOrDocs = [...hv, ...fv, ...cv].map(sanitizeText).filter(Boolean);
   }
 
+  // Only retrieved passages are sources; technique outputs aren't evidence to cite
+  const top = mergedIdsOrDocs.slice(0, opts.topK);
+  const sources = retrievalLists.length > 0 ? top.map((text, i) => toSource(text, itemsByText.get(text), i + 1)) : [];
+  const cite = opts.citations && sources.length > 0;
+
   // Build final synthesis prompt: include top retrieved passages / summaries as context
-  const contextText = mergedIdsOrDocs.slice(0, opts.topK).join("\n\n---\n\n");
+  const contextText = sources.length
+    ? sources.map((s) => `[${s.ref}] ${s.content}`).join("\n\n")
+    : top.join("\n\n---\n\n");
   const synthesisPrompt = [
     "You are a helpful assistant that synthesizes information to answer a user question.",
     "Use the provided contextual passages below to produce a clear, well-structured answer. If the context is insufficient, answer using general knowledge but label it as such.",
@@ -109,20 +156,29 @@ async function ragPipeline(ctx, query, options = {}) {
     "",
     "Instructions:",
     "- Provide a concise answer with 3-6 key points.",
-    "- If sources or passages are available, reference them inline (e.g., 'Passage 1').",
+    ...(cite
+      ? [
+          "- Cite the passages you use by number in square brackets, like [1] or [2][3], right after the statement they support.",
+          "- Only cite passages listed above. Don't cite general knowledge.",
+        ]
+      : []),
     "- If the answer requires caution or is uncertain, say so.",
     ""
   ].join("\n");
 
   ctx.log("[ragPipeline] Synthesizing final answer via LLM...");
-  const finalAnswer = await ctx.chat(synthesisPrompt, opts.finalModelOptions);
+  const answer = sanitizeText(await ctx.chat(synthesisPrompt, opts.finalModelOptions));
+  const citations = cite ? citedRefs(answer, sources.length) : [];
+  for (const s of sources) s.cited = citations.includes(s.ref);
 
   return {
     query,
     translation,
     retrieved: mergedIdsOrDocs,
-    answer: sanitizeText(finalAnswer)
+    sources,
+    citations,
+    answer,
   };
 }
 
-module.exports = { ragPipeline };
+module.exports = { ragPipeline, citedRefs };

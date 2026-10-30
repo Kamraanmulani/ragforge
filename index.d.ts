@@ -158,13 +158,31 @@ export interface PipelineOptions extends TranslateOptions {
   hybrid?: boolean;
   /** Retrieve `rerankK` candidates and reorder them with the reranker */
   rerank?: boolean;
+  /** Ask the LLM to cite passages as [1], [2] (default true) */
+  citations?: boolean;
   finalModelOptions?: LLMOptions;
+}
+
+export interface Source {
+  /** The number the answer cites it by: [1], [2], ... */
+  ref: number;
+  id: string | number | null;
+  content: string;
+  /** The vector store's score, when it returns one */
+  score: number | null;
+  metadata: Record<string, unknown> | null;
+  /** Whether the answer cites this passage */
+  cited: boolean;
 }
 
 export interface PipelineResult {
   query: string;
   translation: Translation;
   retrieved: string[];
+  /** Passages the answer was written from (empty without a vector store) */
+  sources: Source[];
+  /** Source numbers the answer cites, ascending */
+  citations: number[];
   answer: string;
   stats: Stats;
 }
@@ -282,6 +300,8 @@ export interface AutoOptions extends RouteOptions {
   hybrid?: boolean;
   /** Force reranking on or off; by default it follows the routed technique */
   rerank?: boolean;
+  /** Ask the LLM to cite passages as [1], [2] (default true) */
+  citations?: boolean;
   techniqueOptions?: LLMOptions;
   finalModelOptions?: LLMOptions;
 }

@@ -71,7 +71,8 @@ const result = await rf.auto('How do refunds work for annual plans?', {
   from: require('./eval.json'),
 });
 
-console.log(result.answer);
+console.log(result.answer);        // "Annual plans are refunded pro rata [1] ..."
+console.log(result.sources);       // [{ ref: 1, id, content, score, metadata, cited: true }, ...]
 console.log(result.route.reason); // why this technique was chosen
 console.log(result.stats);        // { llmCalls, inputTokens, outputTokens, costUSD, latencyMs, ... }
 ```
@@ -267,6 +268,20 @@ npx ragforge eval --docs ./docs --reranker cohere   # adds rerank and hybrid+rer
 
 Use `createCohereReranker({ apiKey, model })`, `createJinaReranker(...)` or `createLLMReranker({ maxChars })` for custom settings. Reranking adds a call and some latency, so like the query techniques it has to beat plain search by 5 points before the eval recommends it.
 
+### Citations
+
+Answers cite the passages they use, as `[1]`, `[2][3]` or `[1-3]`, and every result says which passages those are:
+
+```js
+const { answer, sources, citations } = await rf.auto('How do refunds work for annual plans?');
+
+answer;     // "Annual plans are refunded pro rata for unused months [1]. Refunds take 5 business days [2]."
+citations;  // [1, 2]
+sources;    // [{ ref: 1, id: 'billing.md#3', content: '...', score: 0.82, metadata: {...}, cited: true }, ...]
+```
+
+`sources` are the passages the answer was written from, in the order given to the LLM. `id`, `score` and `metadata` come from your vector store's results. `citations` lists the numbers the answer actually cites, and markers that point at no passage are ignored. Without a vector store there's nothing to cite, so `sources` is empty. Pass `citations: false` to leave the citation instructions out of the prompt.
+
 ```js
 const { hyde, cot, stepback, fanout, rrf, ragPipeline } = require('ragforge');
 
@@ -443,7 +458,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | `evaluate(options)` | Scoreboard, recommendation and per-question results |
 | `auto(query, options)` | Pipeline result plus `route` |
 | `route(query, options)` | `{ technique, category, classifier, decidedBy, reason }` |
-| `ragPipeline(query, options)` | `{ query, translation, retrieved, answer, stats }` |
+| `ragPipeline(query, options)` | `{ query, translation, retrieved, sources, citations, answer, stats }` |
 | `translate(query, options)` | Technique outputs and retrieval sub-queries |
 | `hyde` / `cot` / `stepback` / `fanout` `(query, options)` | See [Techniques](#techniques) |
 | `callLLM(prompt, options)` | `string` |
@@ -451,7 +466,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | `rrf(lists, k = 60)` | Merged ranking |
 | `setVectorStore(store)` | |
 
-**Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `techniqueOptions`, `finalModelOptions`, `onStats`.
+**Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `citations` (true), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
 **Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
 
