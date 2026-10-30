@@ -1,7 +1,7 @@
 {
   "name": "ragforge",
   "version": "2.0.1",
-  "description": "Find the RAG query technique that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, Chain-of-Thought and RRF, benchmarked on your documents and routed per query, for OpenAI, Ollama and any vector database.",
+  "description": "Find the RAG retrieval setup that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, hybrid BM25 search and reranking, benchmarked on your documents (Markdown, HTML, PDF, DOCX) and routed per query, with citations, for OpenAI, Ollama and any vector database.",
   "keywords": [
     "rag",
     "genai",
@@ -21,7 +21,14 @@
     "query-expansion",
     "evaluation",
     "benchmark",
-    "rag-evaluation"
+    "rag-evaluation",
+    "hybrid-search",
+    "bm25",
+    "reranker",
+    "rerank",
+    "cohere",
+    "citations",
+    "pdf"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {

@@ -2,7 +2,9 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [2.1.0] - 2026-10-30
+
+Hybrid search, reranking, PDF/DOCX/HTML/URL loading and citations, all measurable with the eval.
 
 ### Added
 
@@ -70,6 +72,7 @@ Most code needs no changes: `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, 
 
 First stable release with HyDE, Chain-of-Thought, Step-Back, Fan-Out, RRF and the RAG pipeline.
 
+[2.1.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/Kamraanmulani/ragforge/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/Kamraanmulani/ragforge/releases/tag/v1.1.0
 [1.0.3]: https://www.npmjs.com/package/ragforge/v/1.0.3
