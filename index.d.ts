@@ -16,6 +16,7 @@ export interface LLMOptions {
 export interface Stats {
   llmCalls: number;
   embeddingCalls: number;
+  rerankCalls: number;
   cacheHits: number;
   inputTokens: number;
   outputTokens: number;
@@ -71,6 +72,8 @@ export interface VectorResult {
 
 export interface VectorStore {
   query(vector: number[], topK: number): Promise<Array<VectorResult | string>>;
+  /** Optional keyword search (e.g. BM25 or Postgres full-text), used by hybrid retrieval */
+  searchText?(text: string, topK: number): Promise<Array<VectorResult | string>>;
 }
 
 export interface Cache {
@@ -83,7 +86,23 @@ export interface MemoryCache extends Cache {
   readonly size: number;
 }
 
-export type Price = { input?: number; output?: number };
+export type Price = { input?: number; output?: number; /** USD per rerank search */ perSearch?: number };
+
+export interface Reranker {
+  name: string;
+  /** Looked up in `pricing` for cost tracking */
+  model: string | null;
+  free?: boolean;
+  rerank(params: {
+    query: string;
+    documents: string[];
+    topN: number;
+    /** The instance's chat function, for LLM-based rerankers */
+    chat: (prompt: string, options?: LLMOptions) => Promise<string>;
+  }): Promise<{ results: Array<{ index: number; score: number }>; usage?: { searchUnits?: number; inputTokens?: number } }>;
+}
+
+export type RerankerInput = "llm" | "cohere" | "jina" | Reranker;
 
 export type ProviderInput = "openai" | "ollama" | Provider;
 
@@ -93,6 +112,12 @@ export interface RagforgeOptions {
   llm?: ProviderInput;
   embeddings?: ProviderInput;
   vectorStore?: VectorStore;
+  /** Default for ragPipeline/auto: also keyword-search each query (store needs searchText) */
+  hybrid?: boolean;
+  /** Reranker for rerank techniques and the `rerank` option */
+  reranker?: RerankerInput;
+  /** Default for ragPipeline/auto: rerank retrieved candidates (needs `reranker`) */
+  rerank?: boolean;
   cache?: boolean | Cache;
   /** USD per 1M tokens, merged over DEFAULT_PRICING */
   pricing?: Record<string, Price>;
@@ -129,18 +154,40 @@ export interface Translation {
 export interface PipelineOptions extends TranslateOptions {
   topK?: number;
   rerankK?: number;
+  /** Also keyword-search the query and fuse with RRF (store needs searchText) */
+  hybrid?: boolean;
+  /** Retrieve `rerankK` candidates and reorder them with the reranker */
+  rerank?: boolean;
+  /** Ask the LLM to cite passages as [1], [2] (default true) */
+  citations?: boolean;
   finalModelOptions?: LLMOptions;
+}
+
+export interface Source {
+  /** The number the answer cites it by: [1], [2], ... */
+  ref: number;
+  id: string | number | null;
+  content: string;
+  /** The vector store's score, when it returns one */
+  score: number | null;
+  metadata: Record<string, unknown> | null;
+  /** Whether the answer cites this passage */
+  cited: boolean;
 }
 
 export interface PipelineResult {
   query: string;
   translation: Translation;
   retrieved: string[];
+  /** Passages the answer was written from (empty without a vector store) */
+  sources: Source[];
+  /** Source numbers the answer cites, ascending */
+  citations: number[];
   answer: string;
   stats: Stats;
 }
 
-export type EvalTechnique = "baseline" | Technique | (string & {});
+export type EvalTechnique = "baseline" | "hybrid" | "rerank" | Technique | (string & {});
 
 export interface EvalQuestion {
   question: string;
@@ -158,9 +205,11 @@ export interface EvaluateOptions {
   numQuestions?: number;
   /** Mix of generated question styles (default all three, cycled) */
   questionStyles?: Array<"question" | "keywords" | "conceptual">;
-  /** e.g. ["baseline", "hyde", "hyde+stepback"] */
+  /** e.g. ["baseline", "hybrid", "hyde", "hybrid+hyde"]. "hybrid" needs `documents` or a store with searchText */
   techniques?: EvalTechnique[];
   topK?: number;
+  /** Candidates retrieved for rerank techniques (default 20) */
+  rerankCandidates?: number;
   chunkSize?: number;
   concurrency?: number;
   /** Hit-rate gain over baseline needed to recommend a technique (default 0.05) */
@@ -206,6 +255,14 @@ export interface EvalResult {
 export interface MemoryVectorStore extends VectorStore {
   add(entries: Array<{ id: string; content: string; vector: number[]; metadata?: Record<string, unknown> }>): void;
   query(vector: number[], topK?: number): Promise<Array<{ id: string; content: string; score: number; metadata?: Record<string, unknown> }>>;
+  /** BM25 keyword search over the added entries */
+  searchText(text: string, topK?: number): Promise<Array<{ id: string; content: string; score: number; metadata?: Record<string, unknown> }>>;
+  readonly size: number;
+}
+
+export interface BM25Index {
+  add(entries: Array<{ id: string; content: string; metadata?: Record<string, unknown> }>): void;
+  search(text: string, topK?: number): Array<{ id: string; content: string; score: number; metadata?: Record<string, unknown> }>;
   readonly size: number;
 }
 
@@ -239,6 +296,12 @@ export interface Route {
 export interface AutoOptions extends RouteOptions {
   topK?: number;
   rerankK?: number;
+  /** Force keyword search on or off; by default it follows the routed technique */
+  hybrid?: boolean;
+  /** Force reranking on or off; by default it follows the routed technique */
+  rerank?: boolean;
+  /** Ask the LLM to cite passages as [1], [2] (default true) */
+  citations?: boolean;
   techniqueOptions?: LLMOptions;
   finalModelOptions?: LLMOptions;
 }
@@ -288,9 +351,35 @@ export function createOllamaProvider(options?: {
 
 export function createMemoryCache(options?: { maxEntries?: number }): MemoryCache;
 
+export function createLLMReranker(options?: { maxChars?: number; llmOptions?: LLMOptions }): Reranker;
+export function createCohereReranker(options?: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }): Reranker;
+export function createJinaReranker(options?: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }): Reranker;
+
 export function createMemoryVectorStore(): MemoryVectorStore;
 
+/** Zero-dependency BM25 keyword index, e.g. to add searchText() to your own store */
+export function createBM25Index(options?: { k1?: number; b?: number }): BM25Index;
+
 export function chunkText(text: string, options?: { size?: number }): string[];
+
+export interface LoadedDocument {
+  /** Relative file path ("docs/a.md") or the URL */
+  id: string;
+  content: string;
+  metadata: { source: string; type: string };
+}
+
+/**
+ * Read files, folders (recursively) and http(s) URLs: .txt, .md, .mdx, .rst, .html,
+ * .pdf (needs `unpdf`) and .docx (needs `mammoth`)
+ */
+export function loadDocuments(
+  sources: string | string[],
+  options?: { cwd?: string; concurrency?: number; fetch?: typeof fetch }
+): Promise<LoadedDocument[]>;
+
+/** Readable text from an HTML page, keeping headings, paragraphs and list items */
+export function htmlToText(html: string): string;
 
 /** Plain-text scoreboard for an evaluate() result */
 export function formatTable(result: EvalResult): string;

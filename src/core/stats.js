@@ -1,4 +1,4 @@
-// Per-call usage tracking: LLM/embedding calls, tokens, cost, latency
+// Per-call usage tracking: LLM/embedding/rerank calls, tokens, cost, latency
 const { findPrice } = require("./pricing");
 
 function createTracker(pricing) {
@@ -6,6 +6,7 @@ function createTracker(pricing) {
   const totals = {
     llmCalls: 0,
     embeddingCalls: 0,
+    rerankCalls: 0,
     cacheHits: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -14,14 +15,14 @@ function createTracker(pricing) {
   // Becomes false once any call uses a model with no known price
   let costKnown = true;
 
-  function addCost(provider, model, inputTokens, outputTokens) {
+  function addCost(provider, model, inputTokens, outputTokens, searches = 0) {
     if (provider.free) return;
     const price = findPrice(pricing, model);
     if (!price) {
       costKnown = false;
       return;
     }
-    totals.costUSD += (inputTokens * (price.input ?? 0) + outputTokens * (price.output ?? 0)) / 1e6;
+    totals.costUSD += (inputTokens * (price.input ?? 0) + outputTokens * (price.output ?? 0)) / 1e6 + searches * (price.perSearch ?? 0);
   }
 
   return {
@@ -39,6 +40,15 @@ function createTracker(pricing) {
       totals.embeddingCalls++;
       totals.inputTokens += input;
       addCost(provider, model, input, 0);
+    },
+
+    // The llm reranker reports no usage: its chat call is recorded by recordChat
+    recordRerank(reranker, usage = {}) {
+      const input = usage.inputTokens ?? 0;
+      const searches = usage.searchUnits ?? 0;
+      totals.rerankCalls++;
+      totals.inputTokens += input;
+      if (input || searches) addCost(reranker, reranker.model, input, 0, searches);
     },
 
     recordCacheHit() {

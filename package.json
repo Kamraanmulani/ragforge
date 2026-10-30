@@ -52,18 +52,32 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "jest tests/unit",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit",
     "test:integration": "jest tests/integration --runInBand",
-    "test:watch": "jest tests/unit --watch",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit --watch",
     "typecheck": "tsc --noEmit --strict index.d.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
     "openai": "^6.1.0"
   },
+  "peerDependencies": {
+    "mammoth": ">=1.6.0",
+    "unpdf": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mammoth": {
+      "optional": true
+    },
+    "unpdf": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@qdrant/js-client-rest": "^1.15.1",
     "jest": "^30.2.0",
-    "typescript": "^5.9.3"
+    "mammoth": "^1.13.0",
+    "typescript": "^5.9.3",
+    "unpdf": "^1.8.1"
   }
 }

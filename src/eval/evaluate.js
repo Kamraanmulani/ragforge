@@ -11,12 +11,16 @@ const { subQuestions } = require("../techniques/fanout");
 const { chunkDocuments } = require("./chunk");
 const { createMemoryVectorStore } = require("./memoryVectorStore");
 
-const DEFAULT_TECHNIQUES = ["baseline", "hyde", "stepback", "fanout"];
+const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 
 // Each technique turns a question into the texts that get embedded and searched.
 // Multiple texts are fused with RRF, the same way the pipeline does it.
+// "hybrid" also runs a keyword (BM25) search for the original question.
+// "rerank" retrieves more candidates and lets the reranker pick the top k.
 const QUERY_BUILDERS = {
   baseline: async (ctx, q) => [q],
+  hybrid: async (ctx, q) => [q],
+  rerank: async (ctx, q) => [q],
   hyde: async (ctx, q, o) => [await hypotheticalDocument(ctx, q, o)],
   cot: async (ctx, q, o) => [(await cot(ctx, q, o)).refinedQuery],
   stepback: async (ctx, q, o) => [q, await generalQuestion(ctx, q, o)],
@@ -34,6 +38,19 @@ function parseTechnique(name) {
     throw new Error(`[ragforge] Unknown eval technique "${name}". Use ${Object.keys(QUERY_BUILDERS).join(", ")}, or combine with "+" (e.g. "hyde+stepback").`);
   }
   return parts;
+}
+
+function usesHybrid(technique) {
+  return parseTechnique(technique).includes("hybrid");
+}
+
+function usesRerank(technique) {
+  return parseTechnique(technique).includes("rerank");
+}
+
+// Costs more than plain search: extra LLM calls or a reranker call
+function addsCost(row, baseline) {
+  return row.avgLlmCalls > baseline.avgLlmCalls || usesRerank(row.technique);
 }
 
 async function buildQueries(ctx, technique, question, llmOptions) {
@@ -149,7 +166,8 @@ function rankRows(rows) {
 /**
  * recommend
  * The top scorer, unless it beats plain search by less than `minImprovement`
- * hit rate, in which case the extra LLM calls aren't worth it.
+ * hit rate, in which case the extra cost isn't worth it. A technique with no
+ * extra cost (plain hybrid search) only has to rank above plain search.
  */
 function recommend(ranked, topK, minImprovement) {
   const best = ranked[0];
@@ -166,10 +184,18 @@ function recommend(ranked, topK, minImprovement) {
   }
 
   const gain = best.hitRate - baseline.hitRate;
+  if (!addsCost(best, baseline)) {
+    return {
+      technique: best.technique,
+      reason: gain > 0
+        ? `${best.technique} found the right chunk ${pct(best.hitRate)} of the time vs ${pct(baseline.hitRate)} for plain search (+${Math.round(gain * 100)} points), with no extra LLM calls.`
+        : `${best.technique} matched plain search's hit@${topK} (${pct(best.hitRate)}) and ranked the right chunk higher (MRR ${best.mrr} vs ${baseline.mrr}), with no extra LLM calls.`,
+    };
+  }
   if (gain < minImprovement) {
     return {
       technique: "baseline",
-      reason: `${best.technique} beat plain search by only ${Math.round(gain * 100)} points of hit@${topK}, not enough to justify its extra LLM calls.`,
+      reason: `${best.technique} beat plain search by only ${Math.round(gain * 100)} points of hit@${topK}, not enough to justify its extra cost.`,
     };
   }
   return {
@@ -186,8 +212,9 @@ function recommend(ranked, topK, minImprovement) {
  * @param {Array<{question, expectedId?, expectedText?}>} [options.questions] - Ground-truth questions
  * @param {number} [options.numQuestions=10] - Questions to generate when none are given
  * @param {string[]} [options.questionStyles] - Generated question mix: question, keywords, conceptual
- * @param {string[]} [options.techniques] - e.g. ["baseline", "hyde", "hyde+stepback"]
+ * @param {string[]} [options.techniques] - e.g. ["baseline", "hybrid", "hyde", "hybrid+hyde"]
  * @param {number} [options.topK=5]
+ * @param {number} [options.rerankCandidates=20] - Candidates retrieved for rerank techniques
  * @param {number} [options.chunkSize=800]
  * @param {number} [options.concurrency=4]
  * @param {number} [options.minImprovement=0.05] - Hit-rate gain needed to recommend over baseline
@@ -199,8 +226,8 @@ async function evaluate(config, options = {}) {
     documents,
     numQuestions = 10,
     questionStyles = DEFAULT_QUESTION_STYLES,
-    techniques = DEFAULT_TECHNIQUES,
     topK = 5,
+    rerankCandidates = 20,
     chunkSize = 800,
     concurrency = 4,
     minImprovement = 0.05,
@@ -208,12 +235,23 @@ async function evaluate(config, options = {}) {
     onProgress = () => {},
   } = options;
 
+  const hasDocuments = Boolean(documents && documents.length);
+  // Hybrid needs keyword search: the in-memory store has it, your own store needs searchText()
+  const textSearch = hasDocuments || typeof config.vectorStore?.searchText === "function";
+  const defaults = config.reranker ? [...DEFAULT_TECHNIQUES, "rerank", "hybrid+rerank"] : DEFAULT_TECHNIQUES;
+  const techniques = options.techniques ?? defaults.filter((t) => textSearch || !usesHybrid(t));
+
   // Validate everything before spending any API calls
   techniques.forEach(parseTechnique);
+  if (!textSearch && techniques.some(usesHybrid)) {
+    throw new Error("[ragforge] evaluate: hybrid techniques need keyword search. Pass `documents`, or add `searchText(text, topK)` to your vector store.");
+  }
+  if (!config.reranker && techniques.some(usesRerank)) {
+    throw new Error('[ragforge] evaluate: rerank techniques need a reranker, e.g. createRagforge({ reranker: "cohere" })');
+  }
   if (!questionStyles.length || questionStyles.some((s) => !QUESTION_STYLES[s])) {
     throw new Error(`[ragforge] evaluate: questionStyles must be some of ${Object.keys(QUESTION_STYLES).join(", ")}`);
   }
-  const hasDocuments = Boolean(documents && documents.length);
   if (!hasDocuments && !config.vectorStore) {
     throw new Error("[ragforge] evaluate needs `documents`, or a vectorStore on the instance plus `questions`");
   }
@@ -265,17 +303,23 @@ async function evaluate(config, options = {}) {
     try {
       run.queries = await buildQueries(ctx, technique, q.question, llmOptions);
       const items = new Map();
-      const lists = await Promise.all(
-        run.queries.map(async (text) => {
-          const results = await ctx.queryVectors(await ctx.embed(text), topK);
-          return results.map((item) => {
-            const key = resultKey(item);
-            if (!items.has(key)) items.set(key, item);
-            return key;
-          });
-        })
-      );
-      const ranked = (lists.length === 1 ? lists[0] : rrf(lists)).slice(0, topK);
+      const toKeys = (results) =>
+        results.map((item) => {
+          const key = resultKey(item);
+          if (!items.has(key)) items.set(key, item);
+          return key;
+        });
+      const rerank = usesRerank(technique);
+      const depth = rerank ? Math.max(rerankCandidates, topK) : topK;
+      const searches = run.queries.map(async (text) => toKeys(await ctx.queryVectors(await ctx.embed(text), depth)));
+      if (usesHybrid(technique)) searches.push(store.searchText(q.question, depth).then((results) => toKeys(results ?? [])));
+      const lists = await Promise.all(searches);
+      let ranked = (lists.length === 1 ? lists[0] : rrf(lists)).slice(0, depth);
+      if (rerank) {
+        const order = await ctx.rerank(q.question, ranked.map((key) => extractText(items.get(key))), topK);
+        ranked = order.map((i) => ranked[i]);
+      }
+      ranked = ranked.slice(0, topK);
       run.rank = ranked.findIndex((key) => isMatch(items.get(key), key, q)) + 1;
       run.retrieved = ranked;
     } catch (err) {
@@ -317,4 +361,4 @@ async function evaluate(config, options = {}) {
   };
 }
 
-module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, generateQuestions };
+module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions };

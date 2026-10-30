@@ -6,20 +6,25 @@ const { createRagforge } = require("./createRagforge");
 const { createOpenAIProvider, createOllamaProvider } = require("./providers");
 const { formatTable, renderHtmlReport } = require("./eval/report");
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
-
-const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".mdx", ".rst"]);
+const { loadDocuments } = require("./loaders");
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
 
 Benchmarks RAG query techniques on your documents and recommends one.
 
 Options:
-  --docs <path>             File or folder of .txt/.md/.mdx/.rst files (repeatable)
+  --docs <path|url>         File, folder or http(s) URL (repeatable). Reads .txt, .md,
+                            .mdx, .rst, .html, .pdf (npm i unpdf), .docx (npm i mammoth)
   --questions <n>           Questions to generate from the docs (default 10)
   --questions-file <file>   JSON array of { question, expectedText } to use instead
   --question-styles <list>  Generated mix (default question,keywords,conceptual)
   --techniques <list>       Comma-separated (default ${DEFAULT_TECHNIQUES.join(",")})
-                            Available: baseline, hyde, cot, stepback, fanout; combine with +
+                            Available: baseline, hybrid, rerank, hyde, cot, stepback, fanout;
+                            combine with + (hybrid adds BM25 keyword search,
+                            rerank needs --reranker)
+  --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
+                            adds rerank and hybrid+rerank to the default techniques
+  --rerank-candidates <n>   Candidates retrieved before reranking (default 20)
   --provider <name>         openai (default) or ollama
   --embeddings <name>       Embedding provider (default: same as --provider)
   --model <name>            Chat model (default: provider default)
@@ -34,37 +39,10 @@ Options:
 Examples:
   npx ragforge eval --docs ./docs
   npx ragforge eval --docs ./docs --provider ollama --model qwen2.5 --html report.html
-  npx ragforge eval --docs notes.md --techniques baseline,hyde,hyde+stepback --questions 30
+  npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
+  npx ragforge eval --docs ./docs --reranker cohere
+  npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
 `;
-
-function collectFiles(target) {
-  const stat = fs.statSync(target);
-  if (stat.isFile()) return [target];
-  return fs
-    .readdirSync(target, { withFileTypes: true })
-    .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules")
-    .flatMap((e) => {
-      const full = path.join(target, e.name);
-      if (e.isDirectory()) return collectFiles(full);
-      return TEXT_EXTENSIONS.has(path.extname(e.name).toLowerCase()) ? [full] : [];
-    });
-}
-
-/**
- * readDocuments
- * Ids are relative to the --docs argument's parent ("docs/a/b.md" or "notes.md"),
- * so they stay short wherever the command is run from
- */
-function readDocuments(docArgs, cwd) {
-  return docArgs.flatMap((arg) => {
-    const root = path.resolve(cwd, arg);
-    const base = path.dirname(root);
-    return collectFiles(root).map((file) => ({
-      id: path.relative(base, file).split(path.sep).join("/"),
-      content: fs.readFileSync(file, "utf8"),
-    }));
-  });
-}
 
 function makeProvider(name, { chatModel, embeddingModel } = {}) {
   const opts = {};
@@ -110,6 +88,8 @@ async function main(argv, io = {}) {
         embeddings: { type: "string" },
         model: { type: "string" },
         "embedding-model": { type: "string" },
+        reranker: { type: "string" },
+        "rerank-candidates": { type: "string" },
         "top-k": { type: "string" },
         "chunk-size": { type: "string" },
         concurrency: { type: "string" },
@@ -137,8 +117,8 @@ async function main(argv, io = {}) {
   try {
     if (!values.docs && !values["questions-file"]) throw new Error("--docs is required");
 
-    const documents = readDocuments(values.docs ?? [], cwd);
-    if (values.docs && !documents.length) throw new Error("No .txt/.md/.mdx/.rst files found in --docs");
+    const documents = await loadDocuments(values.docs ?? [], { cwd });
+    if (values.docs && !documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
 
     const questions = values["questions-file"]
       ? JSON.parse(fs.readFileSync(path.resolve(cwd, values["questions-file"]), "utf8"))
@@ -148,6 +128,7 @@ async function main(argv, io = {}) {
     const rf = factory({
       llm: makeProvider(values.provider, { chatModel: values.model }),
       embeddings: makeProvider(embeddingsName, { embeddingModel: values["embedding-model"] }),
+      reranker: values.reranker,
     });
 
     const techniques = values.techniques ? values.techniques.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
@@ -163,6 +144,7 @@ async function main(argv, io = {}) {
       numQuestions: toInt(values.questions, "questions"),
       questionStyles: values["question-styles"] ? values["question-styles"].split(",").map((s) => s.trim()).filter(Boolean) : undefined,
       topK: toInt(values["top-k"], "top-k"),
+      rerankCandidates: toInt(values["rerank-candidates"], "rerank-candidates"),
       chunkSize: toInt(values["chunk-size"], "chunk-size"),
       concurrency: toInt(values.concurrency, "concurrency"),
       onProgress: ({ phase, done, total }) => {

@@ -1,4 +1,4 @@
-// USD prices per 1M tokens. Override or extend with createRagforge({ pricing }).
+// USD prices per 1M tokens (rerankers: per search). Override or extend with createRagforge({ pricing }).
 // Prices change; verify against your provider's pricing page.
 const DEFAULT_PRICING = {
   "gpt-4": { input: 30, output: 60 },
@@ -12,6 +12,7 @@ const DEFAULT_PRICING = {
   "text-embedding-ada-002": { input: 0.1 },
   "text-embedding-3-small": { input: 0.02 },
   "text-embedding-3-large": { input: 0.13 },
+  "rerank-v3.5": { perSearch: 0.002 },
 };
 
 /**
