@@ -342,6 +342,25 @@ export function createBM25Index(options?: { k1?: number; b?: number }): BM25Inde
 
 export function chunkText(text: string, options?: { size?: number }): string[];
 
+export interface LoadedDocument {
+  /** Relative file path ("docs/a.md") or the URL */
+  id: string;
+  content: string;
+  metadata: { source: string; type: string };
+}
+
+/**
+ * Read files, folders (recursively) and http(s) URLs: .txt, .md, .mdx, .rst, .html,
+ * .pdf (needs `unpdf`) and .docx (needs `mammoth`)
+ */
+export function loadDocuments(
+  sources: string | string[],
+  options?: { cwd?: string; concurrency?: number; fetch?: typeof fetch }
+): Promise<LoadedDocument[]>;
+
+/** Readable text from an HTML page, keeping headings, paragraphs and list items */
+export function htmlToText(html: string): string;
+
 /** Plain-text scoreboard for an evaluate() result */
 export function formatTable(result: EvalResult): string;
 

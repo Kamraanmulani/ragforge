@@ -12,6 +12,7 @@ const { rrf } = require("./src/techniques/rrf");
 const { createMemoryVectorStore } = require("./src/eval/memoryVectorStore");
 const { createBM25Index } = require("./src/eval/bm25");
 const { chunkText } = require("./src/eval/chunk");
+const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 
@@ -29,6 +30,8 @@ module.exports = {
   createJinaReranker,
   createMemoryVectorStore,
   createBM25Index,
+  loadDocuments,
+  htmlToText,
   chunkText,
   formatTable,
   renderHtmlReport,

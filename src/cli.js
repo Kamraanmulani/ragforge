@@ -6,15 +6,15 @@ const { createRagforge } = require("./createRagforge");
 const { createOpenAIProvider, createOllamaProvider } = require("./providers");
 const { formatTable, renderHtmlReport } = require("./eval/report");
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
-
-const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".mdx", ".rst"]);
+const { loadDocuments } = require("./loaders");
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
 
 Benchmarks RAG query techniques on your documents and recommends one.
 
 Options:
-  --docs <path>             File or folder of .txt/.md/.mdx/.rst files (repeatable)
+  --docs <path|url>         File, folder or http(s) URL (repeatable). Reads .txt, .md,
+                            .mdx, .rst, .html, .pdf (npm i unpdf), .docx (npm i mammoth)
   --questions <n>           Questions to generate from the docs (default 10)
   --questions-file <file>   JSON array of { question, expectedText } to use instead
   --question-styles <list>  Generated mix (default question,keywords,conceptual)
@@ -41,36 +41,8 @@ Examples:
   npx ragforge eval --docs ./docs --provider ollama --model qwen2.5 --html report.html
   npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
   npx ragforge eval --docs ./docs --reranker cohere
+  npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
 `;
-
-function collectFiles(target) {
-  const stat = fs.statSync(target);
-  if (stat.isFile()) return [target];
-  return fs
-    .readdirSync(target, { withFileTypes: true })
-    .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules")
-    .flatMap((e) => {
-      const full = path.join(target, e.name);
-      if (e.isDirectory()) return collectFiles(full);
-      return TEXT_EXTENSIONS.has(path.extname(e.name).toLowerCase()) ? [full] : [];
-    });
-}
-
-/**
- * readDocuments
- * Ids are relative to the --docs argument's parent ("docs/a/b.md" or "notes.md"),
- * so they stay short wherever the command is run from
- */
-function readDocuments(docArgs, cwd) {
-  return docArgs.flatMap((arg) => {
-    const root = path.resolve(cwd, arg);
-    const base = path.dirname(root);
-    return collectFiles(root).map((file) => ({
-      id: path.relative(base, file).split(path.sep).join("/"),
-      content: fs.readFileSync(file, "utf8"),
-    }));
-  });
-}
 
 function makeProvider(name, { chatModel, embeddingModel } = {}) {
   const opts = {};
@@ -145,8 +117,8 @@ async function main(argv, io = {}) {
   try {
     if (!values.docs && !values["questions-file"]) throw new Error("--docs is required");
 
-    const documents = readDocuments(values.docs ?? [], cwd);
-    if (values.docs && !documents.length) throw new Error("No .txt/.md/.mdx/.rst files found in --docs");
+    const documents = await loadDocuments(values.docs ?? [], { cwd });
+    if (values.docs && !documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
 
     const questions = values["questions-file"]
       ? JSON.parse(fs.readFileSync(path.resolve(cwd, values["questions-file"]), "utf8"))

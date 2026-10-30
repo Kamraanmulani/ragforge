@@ -105,14 +105,14 @@ const rf = createRagforge({ llm: 'ollama' });
 npx ragforge eval --docs ./docs
 ```
 
-1. **Index.** Reads `.txt`, `.md`, `.mdx` and `.rst` files, splits them into chunks and embeds them into an in-memory store.
+1. **Index.** Reads `.txt`, `.md`, `.mdx`, `.rst`, `.html`, `.pdf` and `.docx` files and web pages, splits them into chunks and embeds them into an in-memory store.
 2. **Generate questions.** The LLM writes a test query for chunks spread across your documents, mixing three styles real users have: full questions, short keyword searches and vague *why/how* questions. The chunk it came from is the right answer. Queries that only make sense next to the passage ("the function described…") are thrown out and replaced.
 3. **Run.** Every technique runs on every question, and ragforge checks whether it retrieved that chunk in the top *k*.
 4. **Score and recommend.** You get hit@k, MRR, latency, cost per query and LLM calls for each technique. A technique that adds LLM calls has to beat plain search by **5 points** to be recommended. Hybrid search adds none, so it only has to rank higher.
 
 | Option | Default | |
 |---|---|---|
-| `--docs <path>` | | File or folder, repeatable |
+| `--docs <path\|url>` | | File, folder or http(s) URL, repeatable. See [Documents](#documents) |
 | `--questions <n>` | `10` | Questions to generate |
 | `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]` |
 | `--question-styles <list>` | `question,keywords,conceptual` | Which generated query styles to mix |
@@ -136,11 +136,11 @@ With OpenAI, a 10-question run on the default techniques makes about 40 small `g
 
 ```js
 const fs = require('fs');
-const { createRagforge, formatTable, renderHtmlReport } = require('ragforge');
+const { createRagforge, loadDocuments, formatTable, renderHtmlReport } = require('ragforge');
 const rf = createRagforge();
 
 const result = await rf.evaluate({
-  documents: [{ id: 'handbook.md', content: handbookText }],
+  documents: await loadDocuments(['./docs', 'handbook.pdf']), // or [{ id, content }]
   techniques: ['baseline', 'hybrid', 'hyde', 'stepback', 'hybrid+hyde'],
   numQuestions: 20,
 });
@@ -156,6 +156,27 @@ await rf.evaluate({
 ```
 
 </details>
+
+### Documents
+
+| Format | How it's read | Needs |
+|---|---|---|
+| `.txt` `.md` `.mdx` `.markdown` `.rst` | As is | |
+| `.html` `.htm` | Main content only (`<main>` or `<article>` when present). Scripts, styles, nav, header, footer and sidebars are dropped. Headings and list items are kept. | |
+| `.pdf` | Text of every page | `npm install unpdf` (Node 22+) |
+| `.docx` | Text of every paragraph | `npm install mammoth` |
+| `https://...` | Fetched, then read by content type (HTML, PDF, DOCX or text) | |
+
+PDF and DOCX support use optional packages, so ragforge stays small if you don't need them. You'll get an install hint the first time a file needs one. Scanned PDFs without a text layer are skipped, because there's no text to index.
+
+```js
+const { loadDocuments } = require('ragforge');
+
+const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://example.com/faq']);
+// [{ id: 'docs/intro.md', content: '...', metadata: { source, type } }, ...]
+```
+
+Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
 
 ## Auto-routing
 
@@ -439,7 +460,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 
