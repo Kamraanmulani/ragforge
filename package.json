@@ -1,6 +1,6 @@
 {
   "name": "ragforge",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Find the RAG retrieval setup that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, hybrid BM25 search and reranking, benchmarked on your documents (Markdown, HTML, PDF, DOCX) and routed per query, with citations, for OpenAI, Ollama and any vector database.",
   "keywords": [
     "rag",
