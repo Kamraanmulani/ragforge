@@ -19,6 +19,8 @@ Reach: ragforge works inside the AI coding tools developers already use.
 - **Vector store adapters.** `ragforge/pgvector`, `ragforge/qdrant`, `ragforge/chroma`, `ragforge/pinecone`, `ragforge/lancedb` and `ragforge/supabase`. Each wraps a client you already have (no database package is loaded by ragforge) and returns `{ id, content, score, metadata }`, so `evaluate()` works against production data. The pgvector adapter also adds `searchText` (Postgres full-text search) for hybrid retrieval.
 - The package now has an `exports` map. The root and `./package.json` are unchanged, and deep imports into `src/` are no longer public.
 
+- **Streaming answers.** `rf.auto(q, { stream: true })` and `rf.ragPipeline(q, { stream: true })` return the sources and route right away, plus a `stream` of answer tokens. `answer`, `citations`, `done` and `stats` resolve once the stream has ended. OpenAI, Ollama and Anthropic stream tokens. Other providers fall back to a single chunk. Providers can add a `chatStream` generator.
+
 ### Changed
 
 - `--provider` no longer defaults to `openai` in the CLI parser. `eval` still uses `openai` when you don't pass it, so existing commands behave as before.

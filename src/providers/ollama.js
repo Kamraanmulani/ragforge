@@ -1,4 +1,5 @@
 // Ollama provider adapter (local models, no API cost)
+const { streamPost, readLines } = require("./http");
 
 /**
  * createOllamaProvider
@@ -57,6 +58,32 @@ function createOllamaProvider(options = {}) {
           outputTokens: data.eval_count ?? 0,
         },
       };
+    },
+
+    // Yields tokens from the NDJSON stream; returns { model, usage } from the final line
+    async *chatStream({ prompt, model, temperature, maxTokens, topP, frequencyPenalty, presencePenalty }) {
+      const res = await streamPost("Ollama", `${root}/api/chat`, headers, {
+        model,
+        messages: [{ role: "user", content: prompt }],
+        stream: true,
+        options: {
+          temperature,
+          num_predict: maxTokens,
+          top_p: topP,
+          frequency_penalty: frequencyPenalty,
+          presence_penalty: presencePenalty,
+        },
+      });
+      let usedModel = model;
+      let usage = { inputTokens: 0, outputTokens: 0 };
+      for await (const line of readLines(res.body)) {
+        if (!line.trim()) continue;
+        const data = JSON.parse(line);
+        usedModel = data.model ?? usedModel;
+        if (data.message?.content) yield data.message.content;
+        if (data.done) usage = { inputTokens: data.prompt_eval_count ?? 0, outputTokens: data.eval_count ?? 0 };
+      }
+      return { model: usedModel, usage };
     },
 
     async embed({ text, model }) {

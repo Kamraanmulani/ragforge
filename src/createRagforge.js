@@ -52,8 +52,21 @@ function createRagforge(options = {}) {
   async function run(fn, callOptions = {}) {
     const ctx = createCallContext(config);
     const result = await fn(ctx);
-    if (typeof callOptions.onStats === "function") callOptions.onStats(ctx.tracker.snapshot());
+    // A streamed call reports its stats when the stream ends, see withStats()
+    if (!callOptions.stream && typeof callOptions.onStats === "function") callOptions.onStats(ctx.tracker.snapshot());
     return result;
+  }
+
+  // Adds stats to a pipeline result. For a stream, stats resolve after the last token.
+  function withStats(ctx, result, callOptions) {
+    if (!result.stream) return { ...result, stats: ctx.tracker.snapshot() };
+    const stats = result.done.then(() => {
+      const snapshot = ctx.tracker.snapshot();
+      if (typeof callOptions.onStats === "function") callOptions.onStats(snapshot);
+      return snapshot;
+    });
+    stats.catch(() => {});
+    return { ...result, stats };
   }
 
   return {
@@ -66,7 +79,7 @@ function createRagforge(options = {}) {
     ragPipeline: (query, opts = {}) =>
       run(async (ctx) => {
         const result = await ragPipeline(ctx, query, { hybrid: config.hybrid, rerank: config.rerank, ...opts });
-        return { ...result, stats: ctx.tracker.snapshot() };
+        return withStats(ctx, result, opts);
       }, opts),
 
     // Picks a technique for the query without running it; see src/router/route.js
@@ -88,7 +101,7 @@ function createRagforge(options = {}) {
           chosen.reason += " Reranking was skipped because no reranker is configured.";
         }
         const result = await ragPipeline(ctx, query, { ...opts, hybrid, rerank, techniques: pipelineTechniques(chosen.technique) });
-        return { ...result, route: chosen, stats: ctx.tracker.snapshot() };
+        return withStats(ctx, { ...result, route: chosen }, opts);
       }, opts),
 
     // Benchmarks retrieval techniques; see src/eval/evaluate.js for options

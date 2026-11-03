@@ -71,6 +71,31 @@ function createCallContext(config, tracker = createTracker(config.pricing)) {
     return result.vector;
   }
 
+  /**
+   * chatStream
+   * Yields the answer text as it arrives. Providers with a chatStream(params) generator yield
+   * tokens and return { model, usage } at the end, which is recorded in stats. Without one, the
+   * whole answer comes out as a single chunk. Streamed answers skip the cache.
+   */
+  async function* chatStream(prompt, options = {}) {
+    const params = { prompt, ...normalizeChatOptions(options, defaults, llm) };
+    if (typeof llm.chatStream !== "function") {
+      yield await chat(prompt, options);
+      return;
+    }
+
+    let step;
+    try {
+      const tokens = llm.chatStream(params);
+      while (!(step = await tokens.next()).done) yield step.value;
+    } catch (err) {
+      logger.error(`[ragforge] LLM stream failed: ${err.message || err}`);
+      throw err;
+    }
+    const meta = step.value ?? {};
+    tracker.recordChat(llm, meta.model ?? params.model, meta.usage);
+  }
+
   function hasVectorStore() {
     return config.vectorStore !== null;
   }
@@ -113,6 +138,7 @@ function createCallContext(config, tracker = createTracker(config.pricing)) {
 
   return {
     chat,
+    chatStream,
     embed,
     hasVectorStore,
     queryVectors,

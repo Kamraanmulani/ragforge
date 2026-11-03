@@ -50,6 +50,8 @@ export interface Provider {
   name: string;
   chatModel?: string;
   embeddingModel?: string;
+  /** Optional token stream. Yields text and returns { model, usage } when the stream ends */
+  chatStream?(params: LLMOptions & { prompt: string }): AsyncGenerator<string, { model?: string; usage?: { inputTokens?: number; outputTokens?: number } } | void, void>;
   /** Skip cost calculation (e.g. local models) */
   free?: boolean;
   chat(params: ChatParams): Promise<{ text: string; model?: string; usage?: Usage }>;
@@ -152,6 +154,8 @@ export interface Translation {
 }
 
 export interface PipelineOptions extends TranslateOptions {
+  /** Return the answer as a stream of tokens (see StreamingResult) */
+  stream?: boolean;
   topK?: number;
   rerankK?: number;
   /** Also keyword-search the query and fuse with RRF (store needs searchText) */
@@ -310,10 +314,26 @@ export interface AutoResult extends PipelineResult {
   route: Route;
 }
 
+/** Returned by auto({ stream: true }) and ragPipeline({ stream: true }). Sources are ready before the first token. */
+export interface StreamingResult extends Omit<PipelineResult, "answer" | "citations" | "stats"> {
+  /** Answer tokens, in order. Read it to the end: answer, citations, stats and done settle after that */
+  stream: AsyncGenerator<string, void, void>;
+  answer: Promise<string>;
+  citations: Promise<number[]>;
+  /** Full result once the stream has ended */
+  done: Promise<PipelineResult>;
+  stats: Promise<Stats>;
+}
+
+export interface StreamingAutoResult extends StreamingResult {
+  route: Route;
+}
+
 export interface Ragforge {
   /** Pick a technique for the query without running it */
   route(query: string, options?: RouteOptions): Promise<Route>;
   /** Pick a technique for the query, then run the pipeline with it */
+  auto(query: string, options: AutoOptions & { stream: true }): Promise<StreamingAutoResult>;
   auto(query: string, options?: AutoOptions): Promise<AutoResult>;
   /** Benchmark retrieval techniques on your data and get a recommendation */
   evaluate(options: EvaluateOptions): Promise<EvalResult>;
@@ -426,6 +446,7 @@ export function cot(query: string, options?: CallOptions): Promise<CotResult>;
 export function stepback(query: string, options?: CallOptions): Promise<StepbackResult>;
 export function fanout(query: string, options?: CallOptions): Promise<string>;
 export function ragPipeline(query: string, options?: PipelineOptions): Promise<PipelineResult>;
+export function auto(query: string, options: AutoOptions & { stream: true }): Promise<StreamingAutoResult>;
 export function auto(query: string, options?: AutoOptions): Promise<AutoResult>;
 export function rrf<T = string>(rankedLists: T[][], k?: number): string[];
 export function setVectorClient(client: VectorStore | null): void;

@@ -53,6 +53,33 @@ function createOpenAIProvider(options = {}) {
       };
     },
 
+    // Yields tokens; returns { model, usage } once the stream ends
+    async *chatStream({ prompt, model, temperature, maxTokens, topP, frequencyPenalty, presencePenalty }) {
+      const stream = await getClient().chat.completions.create({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature,
+        max_tokens: maxTokens,
+        top_p: topP,
+        frequency_penalty: frequencyPenalty,
+        presence_penalty: presencePenalty,
+        stream: true,
+        // The last chunk carries token usage
+        stream_options: { include_usage: true },
+      });
+      let usedModel = model;
+      let usage = { inputTokens: 0, outputTokens: 0 };
+      for await (const chunk of stream) {
+        usedModel = chunk.model ?? usedModel;
+        if (chunk.usage) {
+          usage = { inputTokens: chunk.usage.prompt_tokens ?? 0, outputTokens: chunk.usage.completion_tokens ?? 0 };
+        }
+        const token = chunk.choices?.[0]?.delta?.content;
+        if (token) yield token;
+      }
+      return { model: usedModel, usage };
+    },
+
     async embed({ text, model }) {
       const response = await getClient().embeddings.create({ model, input: text });
       return {

@@ -332,6 +332,25 @@ await ragPipeline(query, { techniques: ['hyde', 'stepback'], topK: 5 });
 
 Every technique accepts LLM options as its second argument: `{ model, temperature, max_tokens, ... }`.
 
+## Streaming answers
+
+Pass `stream: true` to `auto()` or `ragPipeline()` and the answer arrives token by token. Retrieval finishes first, so `sources` and `route` are ready before the first token. That makes it easy to show citations while the answer is still being written:
+
+```js
+const result = await rf.auto('How long do refunds take?', { stream: true });
+
+console.log(result.sources);           // ready now
+for await (const token of result.stream) process.stdout.write(token);
+
+const answer = await result.answer;    // settles when the stream has ended
+const citations = await result.citations;
+const stats = await result.stats;      // cost and tokens for the whole call
+```
+
+Read `stream` to the end. `answer`, `citations`, `done` and `stats` settle only after that. If the stream fails, all four reject with the same error.
+
+Streaming works with OpenAI, Ollama and Anthropic. Other providers still return a valid result, but the whole answer comes out as a single chunk. Streamed answers skip the cache.
+
 ## Providers
 
 | Provider | Chat (default model) | Embeddings (default model) | Key |

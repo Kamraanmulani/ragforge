@@ -166,18 +166,65 @@ async function ragPipeline(ctx, query, options = {}) {
     ""
   ].join("\n");
 
+  const base = { query, translation, retrieved: mergedIdsOrDocs, sources, cite };
+
+  // Sources are known now, so streaming callers can show them before the first token
+  if (options.stream) return streamAnswer(ctx, synthesisPrompt, base, opts.finalModelOptions);
+
   ctx.log("[ragPipeline] Synthesizing final answer via LLM...");
   const answer = sanitizeText(await ctx.chat(synthesisPrompt, opts.finalModelOptions));
+  return finishResult(base, answer);
+}
+
+// Marks which sources the answer cites and returns the final result
+function finishResult({ query, translation, retrieved, sources, cite }, answer) {
   const citations = cite ? citedRefs(answer, sources.length) : [];
   for (const s of sources) s.cited = citations.includes(s.ref);
+  return { query, translation, retrieved, sources, citations, answer };
+}
 
+/**
+ * streamAnswer
+ * The answer arrives token by token in `stream`. `answer`, `citations` and `done` resolve
+ * once the stream has been read to the end. Reading `stream` is required for them to settle.
+ */
+function streamAnswer(ctx, prompt, base, finalModelOptions) {
+  let resolveDone;
+  let rejectDone;
+  const done = new Promise((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
+  });
+
+  async function* tokens() {
+    let text = "";
+    try {
+      for await (const token of ctx.chatStream(prompt, finalModelOptions)) {
+        text += token;
+        yield token;
+      }
+      resolveDone(finishResult(base, sanitizeText(text)));
+    } catch (err) {
+      rejectDone(err);
+      throw err;
+    }
+  }
+
+  // Callers who only read `stream` shouldn't see an unhandled rejection from the promises below
+  const derived = (fn) => {
+    const p = done.then(fn);
+    p.catch(() => {});
+    return p;
+  };
+  done.catch(() => {});
+
+  const { cite, ...fields } = base;
   return {
-    query,
-    translation,
-    retrieved: mergedIdsOrDocs,
-    sources,
-    citations,
-    answer,
+    ...fields,
+    stream: tokens(),
+    answer: derived((r) => r.answer),
+    citations: derived((r) => r.citations),
+    done,
   };
 }
 

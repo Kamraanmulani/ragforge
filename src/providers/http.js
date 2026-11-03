@@ -29,4 +29,40 @@ async function postJson(provider, url, headers, body) {
   return res.json();
 }
 
-module.exports = { requireKey, postJson };
+/**
+ * streamPost
+ * POST and return the response with its body still open, for streamed replies
+ */
+async function streamPost(provider, url, headers, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`[ragforge] ${provider} request failed: ${res.status} ${await res.text()}`);
+  }
+  return res;
+}
+
+/**
+ * readLines
+ * Splits a streamed body into lines. Works for SSE ("data: ...") and NDJSON.
+ * Chunks may split a line anywhere, so text is buffered until a newline arrives.
+ */
+async function* readLines(body) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const chunk of body) {
+    buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      yield buffer.slice(0, newline).replace(/\r$/, "");
+      buffer = buffer.slice(newline + 1);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) yield buffer.replace(/\r$/, "");
+}
+
+module.exports = { requireKey, postJson, streamPost, readLines };
