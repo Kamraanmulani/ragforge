@@ -362,6 +362,25 @@ export function createBM25Index(options?: { k1?: number; b?: number }): BM25Inde
 
 export function chunkText(text: string, options?: { size?: number }): string[];
 
+export interface McpServerOptions {
+  /** Documents from loadDocuments() */
+  documents: Array<{ id: string; content: string }>;
+  /** Max characters per passage (default 800) */
+  chunkSize?: number;
+  /** Parallel embedding requests while indexing (default 4) */
+  concurrency?: number;
+  /** Embedding provider for vector search. Omit for keyword search only (no key). */
+  embedder?: unknown;
+  /** Chat provider for the ask tool. Omit to get passages instead of answers. */
+  llm?: unknown;
+  stdin?: NodeJS.ReadableStream;
+  stdout?: NodeJS.WritableStream;
+  stderr?: NodeJS.WritableStream;
+}
+
+/** Serves documents to MCP clients (search_docs, get_chunk, ask) over stdio until stdin closes */
+export function startMcpServer(options: McpServerOptions): Promise<void>;
+
 export interface LoadedDocument {
   /** Relative file path ("docs/a.md") or the URL */
   id: string;

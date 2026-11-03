@@ -2,6 +2,19 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [Unreleased] 2.2.0
+
+Reach: ragforge works inside the AI coding tools developers already use.
+
+### Added
+
+- **MCP server.** `npx ragforge mcp --docs ./docs` indexes a folder and serves it to MCP clients over stdio (Claude Code, Cursor, Windsurf). Three tools: `search_docs` (hybrid search: BM25 always, vectors when embeddings are configured, fused with RRF), `get_chunk` (a passage with its neighbours) and `ask` (a cited answer when a chat model is configured, otherwise the matching passages). It needs no API key: keyword search runs on its own. `--provider ollama` enables answers and vector search fully locally. Also exported as `startMcpServer()`.
+- The MCP server speaks JSON-RPC directly, so the core keeps its two dependencies.
+
+### Changed
+
+- `--provider` no longer defaults to `openai` in the CLI parser. `eval` still uses `openai` when you don't pass it, so existing commands behave as before.
+
 ## [2.1.0] - 2026-10-30
 
 Hybrid search, reranking, PDF/DOCX/HTML/URL loading and citations, all measurable with the eval.

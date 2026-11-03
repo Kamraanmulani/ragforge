@@ -179,6 +179,43 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
 
+## MCP server for coding agents
+
+Give Claude Code, Cursor or Windsurf search over your docs with one command. It needs no API key.
+
+```bash
+claude mcp add ragforge -- npx -y ragforge mcp --docs ./docs
+```
+
+Or add it to a project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "ragforge": {
+      "command": "npx",
+      "args": ["-y", "ragforge", "mcp", "--docs", "./docs"]
+    }
+  }
+}
+```
+
+The server indexes the folder when it starts and exposes three tools:
+
+| Tool | What the agent gets |
+|---|---|
+| `search_docs(query, top_k?)` | The most relevant passages, with ids. Keyword search (BM25) always; vector search too when embeddings are configured, fused with RRF. |
+| `get_chunk(id)` | One passage, plus the passage before and after it from the same document. |
+| `ask(question, top_k?)` | A cited answer built from the passages, when a chat model is configured. Otherwise the matching passages. |
+
+Options:
+
+- **No key, no model (default).** Keyword search only. Exact terms such as error codes, function names and config keys work well.
+- **Fully local with Ollama.** `npx ragforge mcp --docs ./docs --provider ollama --model qwen2.5` turns on `ask` and vector search with a local model (`nomic-embed-text` by default, so run `ollama pull nomic-embed-text` first).
+- **Hosted models.** `--provider openai` needs `OPENAI_API_KEY`. Add `--embeddings ollama` to keep embeddings local.
+
+The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
+
 ## Auto-routing
 
 `auto()` picks a technique for each query, then runs the pipeline with it.

@@ -15,6 +15,7 @@ const { chunkText } = require("./src/eval/chunk");
 const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
+const { startMcpServer } = require("./src/mcp/server");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -38,6 +39,7 @@ module.exports = {
   classifyQuery,
   DEFAULT_RULES,
   DEFAULT_PRICING,
+  startMcpServer,
 
   // v1 API (default instance)
   hyde: (query, options) => getDefault().hyde(query, options),

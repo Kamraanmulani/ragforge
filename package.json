@@ -28,7 +28,9 @@
     "rerank",
     "cohere",
     "citations",
-    "pdf"
+    "pdf",
+    "mcp",
+    "mcp-server"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
