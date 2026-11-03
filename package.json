@@ -92,5 +92,36 @@
     "mammoth": "^1.13.0",
     "typescript": "^5.9.3",
     "unpdf": "^1.8.1"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json",
+    "./pgvector": {
+      "types": "./src/stores/pgvector.d.ts",
+      "default": "./src/stores/pgvector.js"
+    },
+    "./qdrant": {
+      "types": "./src/stores/qdrant.d.ts",
+      "default": "./src/stores/qdrant.js"
+    },
+    "./chroma": {
+      "types": "./src/stores/chroma.d.ts",
+      "default": "./src/stores/chroma.js"
+    },
+    "./pinecone": {
+      "types": "./src/stores/pinecone.d.ts",
+      "default": "./src/stores/pinecone.js"
+    },
+    "./lancedb": {
+      "types": "./src/stores/lancedb.d.ts",
+      "default": "./src/stores/lancedb.js"
+    },
+    "./supabase": {
+      "types": "./src/stores/supabase.d.ts",
+      "default": "./src/stores/supabase.js"
+    }
   }
 }

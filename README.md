@@ -407,6 +407,43 @@ const rf = createRagforge({
 });
 ```
 
+### Built-in adapters
+
+Six adapters turn the client you already have into a vector store. Each is a subpath import, and you pass your own client, so ragforge doesn't load the database package:
+
+| Import | Client you pass | Notes |
+|---|---|---|
+| `ragforge/pgvector` | node-postgres `Pool` | `searchText` uses Postgres full-text search. Table and column names are checked before they go into SQL. |
+| `ragforge/qdrant` | `QdrantClient` (`@qdrant/js-client-rest`) | |
+| `ragforge/chroma` | Chroma collection (`chromadb`) | Score is `1 - distance` |
+| `ragforge/pinecone` | Pinecone index (`@pinecone-database/pinecone`) | Optional `namespace` |
+| `ragforge/lancedb` | LanceDB table (`@lancedb/lancedb`) | Score is `1 / (1 + distance)` |
+| `ragforge/supabase` | Supabase client | Calls an RPC function you create with pgvector |
+
+```js
+const { createRagforge } = require('ragforge');
+const { createPgvectorStore } = require('ragforge/pgvector');
+
+const rf = createRagforge({
+  llm: 'openai',
+  vectorStore: createPgvectorStore({ client: pool, table: 'docs' }),
+  hybrid: true, // uses searchText, the Postgres full-text search
+});
+```
+
+Every adapter returns `{ id, content, score, metadata }`, so `evaluate()` runs against production data as it is. Pass `documents` to evaluate and a store is built in memory instead. Supabase needs a function like this:
+
+```sql
+create function match_documents(query_embedding vector(1536), match_count int)
+returns table (id bigint, content text, similarity float)
+language sql stable as $$
+  select id, content, 1 - (embedding <=> query_embedding) as similarity
+  from documents order by embedding <=> query_embedding limit match_count;
+$$;
+```
+
+The adapters have mock-based tests. Only the Qdrant client is installed in this repo, so the others have not been run against a live database.
+
 <details>
 <summary><b>Pinecone, Weaviate, pgvector</b></summary>
 

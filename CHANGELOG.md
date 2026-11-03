@@ -16,6 +16,9 @@ Reach: ragforge works inside the AI coding tools developers already use.
 
 - **Local embeddings, no API key.** `local` runs a small embedding model in-process with the optional `@huggingface/transformers` package (default `Xenova/bge-small-en-v1.5`). Use it with `createRagforge({ embeddings: 'local' })`, `npx ragforge mcp --embeddings local`, or `npx ragforge eval --provider local --questions-file ...` for a free retrieval-only eval. `createLocalProvider()` is exported. The model is downloaded on first use.
 
+- **Vector store adapters.** `ragforge/pgvector`, `ragforge/qdrant`, `ragforge/chroma`, `ragforge/pinecone`, `ragforge/lancedb` and `ragforge/supabase`. Each wraps a client you already have (no database package is loaded by ragforge) and returns `{ id, content, score, metadata }`, so `evaluate()` works against production data. The pgvector adapter also adds `searchText` (Postgres full-text search) for hybrid retrieval.
+- The package now has an `exports` map. The root and `./package.json` are unchanged, and deep imports into `src/` are no longer public.
+
 ### Changed
 
 - `--provider` no longer defaults to `openai` in the CLI parser. `eval` still uses `openai` when you don't pass it, so existing commands behave as before.
