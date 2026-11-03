@@ -16,7 +16,7 @@ describe('built-in provider registry', () => {
   });
 
   test('unknown names list the available providers', () => {
-    expect(() => createBuiltInProvider('nope')).toThrow(/Use one of: openai, ollama, anthropic, gemini, mistral, cohere/);
+    expect(() => createBuiltInProvider('nope')).toThrow(/Use one of: openai, ollama, anthropic, gemini, mistral, cohere, local/);
   });
 });
 

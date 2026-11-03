@@ -29,7 +29,8 @@ Options:
   --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
                             adds rerank and hybrid+rerank to the default techniques
   --rerank-candidates <n>   Candidates retrieved before reranking (default 20)
-  --provider <name>         openai (eval default), ollama, anthropic, gemini, mistral or cohere
+  --provider <name>         openai (eval default), ollama, anthropic, gemini, mistral, cohere
+                            or local (embeddings in-process, no key; eval then needs --questions-file)
                             mcp: omit for keyword search only; set it to enable ask
   --embeddings <name>       Embedding provider (default: same as --provider).
                             anthropic has no embeddings, so pass one, e.g. --embeddings openai
@@ -214,7 +215,8 @@ async function runMcp(values, { stdin, stdout, stderr, cwd }) {
 
     // Keyword search needs no provider. A chat provider enables `ask`; its embeddings
     // enable vector search, unless --embeddings names another provider.
-    const llm = values.provider ? makeProvider(values.provider, { chatModel: values.model }) : null;
+    // local has embeddings only, so it never serves ask
+    const llm = values.provider && values.provider !== "local" ? makeProvider(values.provider, { chatModel: values.model }) : null;
     // A chat-only provider (anthropic) leaves search keyword-only unless --embeddings is set
     const provider = values.provider && (values.embeddings || supportsEmbeddings(values.provider)) ? values.provider : undefined;
     const embeddingsName = embeddingsProviderName(values, provider);

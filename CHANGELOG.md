@@ -14,6 +14,8 @@ Reach: ragforge works inside the AI coding tools developers already use.
 - **More providers.** Built in: `anthropic` (Claude, chat only), `gemini`, `mistral` and `cohere` (chat and embeddings), alongside `openai` and `ollama`. Use them with `createRagforge({ llm: 'anthropic' })`, or on the CLI with `--provider` and `--embeddings`. They use plain `fetch`, so the core still has 2 dependencies. Prices for their main models are in `DEFAULT_PRICING`.
 - `createAnthropicProvider`, `createGeminiProvider`, `createMistralProvider` and `createCohereProvider` are exported.
 
+- **Local embeddings, no API key.** `local` runs a small embedding model in-process with the optional `@huggingface/transformers` package (default `Xenova/bge-small-en-v1.5`). Use it with `createRagforge({ embeddings: 'local' })`, `npx ragforge mcp --embeddings local`, or `npx ragforge eval --provider local --questions-file ...` for a free retrieval-only eval. `createLocalProvider()` is exported. The model is downloaded on first use.
+
 ### Changed
 
 - `--provider` no longer defaults to `openai` in the CLI parser. `eval` still uses `openai` when you don't pass it, so existing commands behave as before.

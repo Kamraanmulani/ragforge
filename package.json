@@ -71,10 +71,14 @@
     "openai": "^6.1.0"
   },
   "peerDependencies": {
+    "@huggingface/transformers": ">=3.0.0",
     "mammoth": ">=1.6.0",
     "unpdf": ">=1.0.0"
   },
   "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    },
     "mammoth": {
       "optional": true
     },

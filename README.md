@@ -342,6 +342,7 @@ Every technique accepts LLM options as its second argument: `{ model, temperatur
 | `gemini` | Yes (gemini-2.5-flash) | Yes (gemini-embedding-001) | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
 | `mistral` | Yes (mistral-small-latest) | Yes (mistral-embed) | `MISTRAL_API_KEY` |
 | `cohere` | Yes (command-a-03-2025) | Yes (embed-v4.0) | `COHERE_API_KEY` |
+| `local` | No | Yes, in-process (Xenova/bge-small-en-v1.5), free | none (`npm install @huggingface/transformers`) |
 
 ```js
 createRagforge({ llm: 'openai' });                         // default: gpt-4o-mini + text-embedding-ada-002
@@ -349,6 +350,8 @@ createRagforge({ llm: 'ollama' });                         // llama3.1 + nomic-e
 createRagforge({ llm: 'ollama', embeddings: 'openai' });   // mix and match
 createRagforge({ llm: 'anthropic', embeddings: 'gemini' }); // Claude answers, Gemini embeds
 ```
+
+Local embeddings run a small model in-process with `@huggingface/transformers`, so retrieval needs no key and no server. The first use downloads the model, which is then cached. Use it as `createRagforge({ embeddings: 'local' })`, or `npx ragforge mcp --docs ./docs --embeddings local` for keyword plus vector search with no key. Local has no chat model, so `npx ragforge eval --docs ./docs --provider local --questions-file golden.json --techniques baseline,hybrid` runs a retrieval-only eval at zero cost.
 
 On the CLI: `npx ragforge eval --docs ./docs --provider gemini`, or `--provider anthropic --embeddings openai`. The API keys are read from the environment or a `.env` file, and only when a call needs them.
 

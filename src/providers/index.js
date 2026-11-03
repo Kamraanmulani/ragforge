@@ -5,6 +5,7 @@ const { createAnthropicProvider } = require("./anthropic");
 const { createGeminiProvider } = require("./gemini");
 const { createMistralProvider } = require("./mistral");
 const { createCohereProvider } = require("./cohere");
+const { createLocalProvider } = require("./local");
 
 const builtIn = {
   openai: createOpenAIProvider,
@@ -13,10 +14,11 @@ const builtIn = {
   gemini: createGeminiProvider,
   mistral: createMistralProvider,
   cohere: createCohereProvider,
+  local: createLocalProvider,
 };
 
 // Built-in providers with an embeddings API (anthropic is chat only)
-const EMBEDDING_PROVIDERS = new Set(["openai", "ollama", "gemini", "mistral", "cohere"]);
+const EMBEDDING_PROVIDERS = new Set(["openai", "ollama", "gemini", "mistral", "cohere", "local"]);
 
 /**
  * createBuiltInProvider
@@ -53,4 +55,5 @@ module.exports = {
   createGeminiProvider,
   createMistralProvider,
   createCohereProvider,
+  createLocalProvider,
 };

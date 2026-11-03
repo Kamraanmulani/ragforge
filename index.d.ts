@@ -104,7 +104,7 @@ export interface Reranker {
 
 export type RerankerInput = "llm" | "cohere" | "jina" | Reranker;
 
-export type ProviderInput = "openai" | "ollama" | "anthropic" | "gemini" | "mistral" | "cohere" | Provider;
+export type ProviderInput = "openai" | "ollama" | "anthropic" | "gemini" | "mistral" | "cohere" | "local" | Provider;
 
 export type Technique = "hyde" | "cot" | "stepback" | "fanout";
 
@@ -342,6 +342,8 @@ export function createOpenAIProvider(options?: {
   embeddingModel?: string;
 }): OpenAIProvider;
 
+/** In-process embeddings with @huggingface/transformers (npm install @huggingface/transformers). No key. */
+export function createLocalProvider(options?: { embeddingModel?: string }): Provider;
 export function createAnthropicProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string }): Provider;
 export function createGeminiProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string; embeddingModel?: string }): Provider;
 export function createMistralProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string; embeddingModel?: string }): Provider;
