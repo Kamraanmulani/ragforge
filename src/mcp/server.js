@@ -161,8 +161,8 @@ async function startMcpServer(options) {
     stdout = process.stdout,
     stderr = process.stderr,
   } = options;
-  // Like the eval: embeddings default to the chat provider
-  const embedder = options.embedder ?? llm ?? null;
+  // Like the eval: embeddings default to the chat provider, unless it has no embeddings API (anthropic)
+  const embedder = options.embedder ?? (llm?.embeddingModel ? llm : null);
   const log = (msg) => stderr.write(`[ragforge mcp] ${msg}\n`);
   const send = (message) => stdout.write(`${JSON.stringify(message)}\n`);
 

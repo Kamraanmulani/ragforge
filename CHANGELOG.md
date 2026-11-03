@@ -11,6 +11,9 @@ Reach: ragforge works inside the AI coding tools developers already use.
 - **MCP server.** `npx ragforge mcp --docs ./docs` indexes a folder and serves it to MCP clients over stdio (Claude Code, Cursor, Windsurf). Three tools: `search_docs` (hybrid search: BM25 always, vectors when embeddings are configured, fused with RRF), `get_chunk` (a passage with its neighbours) and `ask` (a cited answer when a chat model is configured, otherwise the matching passages). It needs no API key: keyword search runs on its own. `--provider ollama` enables answers and vector search fully locally. Also exported as `startMcpServer()`.
 - The MCP server speaks JSON-RPC directly, so the core keeps its two dependencies.
 
+- **More providers.** Built in: `anthropic` (Claude, chat only), `gemini`, `mistral` and `cohere` (chat and embeddings), alongside `openai` and `ollama`. Use them with `createRagforge({ llm: 'anthropic' })`, or on the CLI with `--provider` and `--embeddings`. They use plain `fetch`, so the core still has 2 dependencies. Prices for their main models are in `DEFAULT_PRICING`.
+- `createAnthropicProvider`, `createGeminiProvider`, `createMistralProvider` and `createCohereProvider` are exported.
+
 ### Changed
 
 - `--provider` no longer defaults to `openai` in the CLI parser. `eval` still uses `openai` when you don't pass it, so existing commands behave as before.

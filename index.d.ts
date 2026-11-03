@@ -104,7 +104,7 @@ export interface Reranker {
 
 export type RerankerInput = "llm" | "cohere" | "jina" | Reranker;
 
-export type ProviderInput = "openai" | "ollama" | Provider;
+export type ProviderInput = "openai" | "ollama" | "anthropic" | "gemini" | "mistral" | "cohere" | Provider;
 
 export type Technique = "hyde" | "cot" | "stepback" | "fanout";
 
@@ -342,6 +342,10 @@ export function createOpenAIProvider(options?: {
   embeddingModel?: string;
 }): OpenAIProvider;
 
+export function createAnthropicProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string }): Provider;
+export function createGeminiProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string; embeddingModel?: string }): Provider;
+export function createMistralProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string; embeddingModel?: string }): Provider;
+export function createCohereProvider(options?: { apiKey?: string; baseURL?: string; chatModel?: string; embeddingModel?: string }): Provider;
 export function createOllamaProvider(options?: {
   baseURL?: string;
   chatModel?: string;

@@ -4,7 +4,7 @@
 // The top-level functions below are the v1 API, kept working through a lazily
 // created default instance (OpenAI, key from OPENAI_API_KEY).
 const { createRagforge } = require("./src/createRagforge");
-const { createOpenAIProvider, createOllamaProvider } = require("./src/providers");
+const { createOpenAIProvider, createOllamaProvider, createAnthropicProvider, createGeminiProvider, createMistralProvider, createCohereProvider } = require("./src/providers");
 const { createMemoryCache } = require("./src/core/cache");
 const { createLLMReranker, createCohereReranker, createJinaReranker } = require("./src/rerankers");
 const { DEFAULT_PRICING } = require("./src/core/pricing");
@@ -25,6 +25,10 @@ module.exports = {
   createRagforge,
   createOpenAIProvider,
   createOllamaProvider,
+  createAnthropicProvider,
+  createGeminiProvider,
+  createMistralProvider,
+  createCohereProvider,
   createMemoryCache,
   createLLMReranker,
   createCohereReranker,

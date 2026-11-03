@@ -13,6 +13,20 @@ const DEFAULT_PRICING = {
   "text-embedding-3-small": { input: 0.02 },
   "text-embedding-3-large": { input: 0.13 },
   "rerank-v3.5": { perSearch: 0.002 },
+  // Anthropic (per MTok, standard tier). Opus 4.6 is the most recently listed Opus price.
+  "claude-haiku-4-5": { input: 1, output: 5 },
+  "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-opus-4-6": { input: 5, output: 25 },
+  // Gemini. gemini-2.5-pro's long-context (>200k token) tier is not modelled.
+  "gemini-2.5-flash-lite": { input: 0.1, output: 0.4 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gemini-2.5-pro": { input: 1.25, output: 10 },
+  // Mistral
+  "mistral-small-latest": { input: 0.15, output: 0.6 },
+  "mistral-large-latest": { input: 0.5, output: 1.5 },
+  // Cohere
+  "command-a-03-2025": { input: 2.5, output: 10 },
+  "embed-v4.0": { input: 0.12 },
 };
 
 /**

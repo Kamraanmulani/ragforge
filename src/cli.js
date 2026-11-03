@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("util");
 const { createRagforge } = require("./createRagforge");
-const { createOpenAIProvider, createOllamaProvider } = require("./providers");
+const { createBuiltInProvider, builtInProviderNames, supportsEmbeddings } = require("./providers");
 const { formatTable, renderHtmlReport } = require("./eval/report");
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
 const { loadDocuments } = require("./loaders");
@@ -29,9 +29,10 @@ Options:
   --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
                             adds rerank and hybrid+rerank to the default techniques
   --rerank-candidates <n>   Candidates retrieved before reranking (default 20)
-  --provider <name>         openai (eval default) or ollama
+  --provider <name>         openai (eval default), ollama, anthropic, gemini, mistral or cohere
                             mcp: omit for keyword search only; set it to enable ask
-  --embeddings <name>       Embedding provider (default: same as --provider)
+  --embeddings <name>       Embedding provider (default: same as --provider).
+                            anthropic has no embeddings, so pass one, e.g. --embeddings openai
                             mcp: omit both for keyword search only (no key, no model)
   --model <name>            Chat model (default: provider default)
   --embedding-model <name>  Embedding model (default: provider default)
@@ -61,9 +62,16 @@ function makeProvider(name, { chatModel, embeddingModel } = {}) {
   const opts = {};
   if (chatModel) opts.chatModel = chatModel;
   if (embeddingModel) opts.embeddingModel = embeddingModel;
-  if (name === "openai") return createOpenAIProvider(opts);
-  if (name === "ollama") return createOllamaProvider(opts);
-  throw new Error(`Unknown provider "${name}" (use openai or ollama)`);
+  return createBuiltInProvider(name, opts);
+}
+
+// Embeddings come from --embeddings, or from --provider when that provider has an embeddings API
+function embeddingsProviderName(values, provider) {
+  const name = values.embeddings ?? provider;
+  if (name && !supportsEmbeddings(name)) {
+    throw new Error(`${name} has no embeddings API. Pass --embeddings with one of: ${builtInProviderNames.filter(supportsEmbeddings).join(", ")}`);
+  }
+  return name;
 }
 
 function toInt(value, name) {
@@ -140,7 +148,7 @@ async function main(argv, io = {}) {
       ? JSON.parse(fs.readFileSync(path.resolve(cwd, values["questions-file"]), "utf8"))
       : undefined;
 
-    const embeddingsName = values.embeddings ?? provider;
+    const embeddingsName = embeddingsProviderName(values, provider);
     const rf = factory({
       llm: makeProvider(provider, { chatModel: values.model }),
       embeddings: makeProvider(embeddingsName, { embeddingModel: values["embedding-model"] }),
@@ -207,7 +215,9 @@ async function runMcp(values, { stdin, stdout, stderr, cwd }) {
     // Keyword search needs no provider. A chat provider enables `ask`; its embeddings
     // enable vector search, unless --embeddings names another provider.
     const llm = values.provider ? makeProvider(values.provider, { chatModel: values.model }) : null;
-    const embeddingsName = values.embeddings ?? values.provider;
+    // A chat-only provider (anthropic) leaves search keyword-only unless --embeddings is set
+    const provider = values.provider && (values.embeddings || supportsEmbeddings(values.provider)) ? values.provider : undefined;
+    const embeddingsName = embeddingsProviderName(values, provider);
     const embedder = embeddingsName ? makeProvider(embeddingsName, { embeddingModel: values["embedding-model"] }) : null;
 
     await startMcpServer({

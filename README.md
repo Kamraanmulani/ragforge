@@ -334,10 +334,25 @@ Every technique accepts LLM options as its second argument: `{ model, temperatur
 
 ## Providers
 
+| Provider | Chat (default model) | Embeddings (default model) | Key |
+|---|---|---|---|
+| `openai` | Yes (gpt-4o-mini) | Yes (text-embedding-ada-002) | `OPENAI_API_KEY` |
+| `ollama` | Yes (llama3.1) | Yes (nomic-embed-text) | none, local |
+| `anthropic` | Yes (claude-sonnet-4-6) | No, Anthropic has no embeddings API | `ANTHROPIC_API_KEY` |
+| `gemini` | Yes (gemini-2.5-flash) | Yes (gemini-embedding-001) | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
+| `mistral` | Yes (mistral-small-latest) | Yes (mistral-embed) | `MISTRAL_API_KEY` |
+| `cohere` | Yes (command-a-03-2025) | Yes (embed-v4.0) | `COHERE_API_KEY` |
+
 ```js
 createRagforge({ llm: 'openai' });                         // default: gpt-4o-mini + text-embedding-ada-002
 createRagforge({ llm: 'ollama' });                         // llama3.1 + nomic-embed-text on localhost:11434
 createRagforge({ llm: 'ollama', embeddings: 'openai' });   // mix and match
+createRagforge({ llm: 'anthropic', embeddings: 'gemini' }); // Claude answers, Gemini embeds
+```
+
+On the CLI: `npx ragforge eval --docs ./docs --provider gemini`, or `--provider anthropic --embeddings openai`. The API keys are read from the environment or a `.env` file, and only when a call needs them.
+
+Prices for the built-in models are in `DEFAULT_PRICING`. Models without a verified price, such as the Gemini and Mistral embedding models, report `costUSD: null` (unknown) instead of a guess. Add your own with `createRagforge({ pricing })`.
 ```
 
 <details>
