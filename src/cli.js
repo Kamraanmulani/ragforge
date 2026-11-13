@@ -3,14 +3,18 @@ const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("util");
 const { createRagforge } = require("./createRagforge");
-const { createOpenAIProvider, createOllamaProvider } = require("./providers");
+const { createBuiltInProvider, builtInProviderNames, supportsEmbeddings } = require("./providers");
 const { formatTable, renderHtmlReport } = require("./eval/report");
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
 const { loadDocuments } = require("./loaders");
+const { startMcpServer } = require("./mcp/server");
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
+       ragforge mcp --docs <file|dir> [options]
 
-Benchmarks RAG query techniques on your documents and recommends one.
+eval: benchmarks RAG query techniques on your documents and recommends one.
+mcp:  serves your documents to coding agents (Claude Code, Cursor, Windsurf) over MCP.
+      Tools: search_docs, get_chunk, ask. Works with no API key (keyword search).
 
 Options:
   --docs <path|url>         File, folder or http(s) URL (repeatable). Reads .txt, .md,
@@ -25,8 +29,12 @@ Options:
   --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
                             adds rerank and hybrid+rerank to the default techniques
   --rerank-candidates <n>   Candidates retrieved before reranking (default 20)
-  --provider <name>         openai (default) or ollama
-  --embeddings <name>       Embedding provider (default: same as --provider)
+  --provider <name>         openai (eval default), ollama, anthropic, gemini, mistral, cohere
+                            or local (embeddings in-process, no key; eval then needs --questions-file)
+                            mcp: omit for keyword search only; set it to enable ask
+  --embeddings <name>       Embedding provider (default: same as --provider).
+                            anthropic has no embeddings, so pass one, e.g. --embeddings openai
+                            mcp: omit both for keyword search only (no key, no model)
   --model <name>            Chat model (default: provider default)
   --embedding-model <name>  Embedding model (default: provider default)
   --top-k <n>               Results per search (default 5)
@@ -36,7 +44,14 @@ Options:
   --json <file>             Write full results as JSON
   -h, --help                Show this help
 
+MCP options (mcp command):
+  --top-k <n>               Default passages per search_docs / ask call (default 5)
+  --chunk-size <n>          Max characters per passage (default 800)
+
 Examples:
+  npx ragforge mcp --docs ./docs
+  npx ragforge mcp --docs ./docs --embeddings ollama --provider ollama --model qwen2.5
+  claude mcp add ragforge -- npx -y ragforge mcp --docs ./docs
   npx ragforge eval --docs ./docs
   npx ragforge eval --docs ./docs --provider ollama --model qwen2.5 --html report.html
   npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
@@ -48,9 +63,16 @@ function makeProvider(name, { chatModel, embeddingModel } = {}) {
   const opts = {};
   if (chatModel) opts.chatModel = chatModel;
   if (embeddingModel) opts.embeddingModel = embeddingModel;
-  if (name === "openai") return createOpenAIProvider(opts);
-  if (name === "ollama") return createOllamaProvider(opts);
-  throw new Error(`Unknown provider "${name}" (use openai or ollama)`);
+  return createBuiltInProvider(name, opts);
+}
+
+// Embeddings come from --embeddings, or from --provider when that provider has an embeddings API
+function embeddingsProviderName(values, provider) {
+  const name = values.embeddings ?? provider;
+  if (name && !supportsEmbeddings(name)) {
+    throw new Error(`${name} has no embeddings API. Pass --embeddings with one of: ${builtInProviderNames.filter(supportsEmbeddings).join(", ")}`);
+  }
+  return name;
 }
 
 function toInt(value, name) {
@@ -84,7 +106,7 @@ async function main(argv, io = {}) {
         "questions-file": { type: "string" },
         "question-styles": { type: "string" },
         techniques: { type: "string" },
-        provider: { type: "string", default: "openai" },
+        provider: { type: "string" },
         embeddings: { type: "string" },
         model: { type: "string" },
         "embedding-model": { type: "string" },
@@ -109,11 +131,14 @@ async function main(argv, io = {}) {
     out(HELP);
     return values.help ? 0 : 1;
   }
+  if (command === "mcp") return runMcp(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
+
   if (command !== "eval") {
     stderr.write(`Unknown command "${command}".\n\n${HELP}`);
     return 1;
   }
 
+  const provider = values.provider ?? "openai";
   try {
     if (!values.docs && !values["questions-file"]) throw new Error("--docs is required");
 
@@ -124,16 +149,16 @@ async function main(argv, io = {}) {
       ? JSON.parse(fs.readFileSync(path.resolve(cwd, values["questions-file"]), "utf8"))
       : undefined;
 
-    const embeddingsName = values.embeddings ?? values.provider;
+    const embeddingsName = embeddingsProviderName(values, provider);
     const rf = factory({
-      llm: makeProvider(values.provider, { chatModel: values.model }),
+      llm: makeProvider(provider, { chatModel: values.model }),
       embeddings: makeProvider(embeddingsName, { embeddingModel: values["embedding-model"] }),
       reranker: values.reranker,
     });
 
     const techniques = values.techniques ? values.techniques.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
 
-    stderr.write(`Evaluating ${documents.length} document(s) with ${values.provider}...\n`);
+    stderr.write(`Evaluating ${documents.length} document(s) with ${provider}...\n`);
     // Live counter in a terminal; one line per phase when piped (CI logs)
     const live = Boolean(stderr.isTTY);
     let lastPhase = null;
@@ -173,6 +198,43 @@ async function main(argv, io = {}) {
     return 0;
   } catch (err) {
     stderr.write(`\nError: ${err.message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * runMcp
+ * Serves the docs over stdio until the client disconnects. stdout is reserved
+ * for protocol messages, so every message goes to stderr.
+ */
+async function runMcp(values, { stdin, stdout, stderr, cwd }) {
+  try {
+    if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge mcp --docs ./docs");
+    const documents = await loadDocuments(values.docs, { cwd });
+    if (!documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+
+    // Keyword search needs no provider. A chat provider enables `ask`; its embeddings
+    // enable vector search, unless --embeddings names another provider.
+    // local has embeddings only, so it never serves ask
+    const llm = values.provider && values.provider !== "local" ? makeProvider(values.provider, { chatModel: values.model }) : null;
+    // A chat-only provider (anthropic) leaves search keyword-only unless --embeddings is set
+    const provider = values.provider && (values.embeddings || supportsEmbeddings(values.provider)) ? values.provider : undefined;
+    const embeddingsName = embeddingsProviderName(values, provider);
+    const embedder = embeddingsName ? makeProvider(embeddingsName, { embeddingModel: values["embedding-model"] }) : null;
+
+    await startMcpServer({
+      documents,
+      llm,
+      embedder,
+      chunkSize: toInt(values["chunk-size"], "chunk-size"),
+      concurrency: toInt(values.concurrency, "concurrency"),
+      stdin,
+      stdout,
+      stderr,
+    });
+    return 0;
+  } catch (err) {
+    stderr.write(`Error: ${err.message}\n`);
     return 1;
   }
 }

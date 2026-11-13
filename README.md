@@ -179,6 +179,43 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
 
+## MCP server for coding agents
+
+Give Claude Code, Cursor or Windsurf search over your docs with one command. It needs no API key.
+
+```bash
+claude mcp add ragforge -- npx -y ragforge mcp --docs ./docs
+```
+
+Or add it to a project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "ragforge": {
+      "command": "npx",
+      "args": ["-y", "ragforge", "mcp", "--docs", "./docs"]
+    }
+  }
+}
+```
+
+The server indexes the folder when it starts and exposes three tools:
+
+| Tool | What the agent gets |
+|---|---|
+| `search_docs(query, top_k?)` | The most relevant passages, with ids. Keyword search (BM25) always; vector search too when embeddings are configured, fused with RRF. |
+| `get_chunk(id)` | One passage, plus the passage before and after it from the same document. |
+| `ask(question, top_k?)` | A cited answer built from the passages, when a chat model is configured. Otherwise the matching passages. |
+
+Options:
+
+- **No key, no model (default).** Keyword search only. Exact terms such as error codes, function names and config keys work well.
+- **Fully local with Ollama.** `npx ragforge mcp --docs ./docs --provider ollama --model qwen2.5` turns on `ask` and vector search with a local model (`nomic-embed-text` by default, so run `ollama pull nomic-embed-text` first).
+- **Hosted models.** `--provider openai` needs `OPENAI_API_KEY`. Add `--embeddings ollama` to keep embeddings local.
+
+The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
+
 ## Auto-routing
 
 `auto()` picks a technique for each query, then runs the pipeline with it.
@@ -295,12 +332,49 @@ await ragPipeline(query, { techniques: ['hyde', 'stepback'], topK: 5 });
 
 Every technique accepts LLM options as its second argument: `{ model, temperature, max_tokens, ... }`.
 
+## Streaming answers
+
+Pass `stream: true` to `auto()` or `ragPipeline()` and the answer arrives token by token. Retrieval finishes first, so `sources` and `route` are ready before the first token. That makes it easy to show citations while the answer is still being written:
+
+```js
+const result = await rf.auto('How long do refunds take?', { stream: true });
+
+console.log(result.sources);           // ready now
+for await (const token of result.stream) process.stdout.write(token);
+
+const answer = await result.answer;    // settles when the stream has ended
+const citations = await result.citations;
+const stats = await result.stats;      // cost and tokens for the whole call
+```
+
+Read `stream` to the end. `answer`, `citations`, `done` and `stats` settle only after that. If the stream fails, all four reject with the same error.
+
+Streaming works with OpenAI, Ollama and Anthropic. Other providers still return a valid result, but the whole answer comes out as a single chunk. Streamed answers skip the cache.
+
 ## Providers
+
+| Provider | Chat (default model) | Embeddings (default model) | Key |
+|---|---|---|---|
+| `openai` | Yes (gpt-4o-mini) | Yes (text-embedding-ada-002) | `OPENAI_API_KEY` |
+| `ollama` | Yes (llama3.1) | Yes (nomic-embed-text) | none, local |
+| `anthropic` | Yes (claude-sonnet-4-6) | No, Anthropic has no embeddings API | `ANTHROPIC_API_KEY` |
+| `gemini` | Yes (gemini-2.5-flash) | Yes (gemini-embedding-001) | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
+| `mistral` | Yes (mistral-small-latest) | Yes (mistral-embed) | `MISTRAL_API_KEY` |
+| `cohere` | Yes (command-a-03-2025) | Yes (embed-v4.0) | `COHERE_API_KEY` |
+| `local` | No | Yes, in-process (Xenova/bge-small-en-v1.5), free | none (`npm install @huggingface/transformers`) |
 
 ```js
 createRagforge({ llm: 'openai' });                         // default: gpt-4o-mini + text-embedding-ada-002
 createRagforge({ llm: 'ollama' });                         // llama3.1 + nomic-embed-text on localhost:11434
 createRagforge({ llm: 'ollama', embeddings: 'openai' });   // mix and match
+createRagforge({ llm: 'anthropic', embeddings: 'gemini' }); // Claude answers, Gemini embeds
+```
+
+Local embeddings run a small model in-process with `@huggingface/transformers`, so retrieval needs no key and no server. The first use downloads the model, which is then cached. Use it as `createRagforge({ embeddings: 'local' })`, or `npx ragforge mcp --docs ./docs --embeddings local` for keyword plus vector search with no key. Local has no chat model, so `npx ragforge eval --docs ./docs --provider local --questions-file golden.json --techniques baseline,hybrid` runs a retrieval-only eval at zero cost.
+
+On the CLI: `npx ragforge eval --docs ./docs --provider gemini`, or `--provider anthropic --embeddings openai`. The API keys are read from the environment or a `.env` file, and only when a call needs them.
+
+Prices for the built-in models are in `DEFAULT_PRICING`. Models without a verified price, such as the Gemini and Mistral embedding models, report `costUSD: null` (unknown) instead of a guess. Add your own with `createRagforge({ pricing })`.
 ```
 
 <details>
@@ -351,6 +425,43 @@ const rf = createRagforge({
   },
 });
 ```
+
+### Built-in adapters
+
+Six adapters turn the client you already have into a vector store. Each is a subpath import, and you pass your own client, so ragforge doesn't load the database package:
+
+| Import | Client you pass | Notes |
+|---|---|---|
+| `ragforge/pgvector` | node-postgres `Pool` | `searchText` uses Postgres full-text search. Table and column names are checked before they go into SQL. |
+| `ragforge/qdrant` | `QdrantClient` (`@qdrant/js-client-rest`) | |
+| `ragforge/chroma` | Chroma collection (`chromadb`) | Score is `1 - distance` |
+| `ragforge/pinecone` | Pinecone index (`@pinecone-database/pinecone`) | Optional `namespace` |
+| `ragforge/lancedb` | LanceDB table (`@lancedb/lancedb`) | Score is `1 / (1 + distance)` |
+| `ragforge/supabase` | Supabase client | Calls an RPC function you create with pgvector |
+
+```js
+const { createRagforge } = require('ragforge');
+const { createPgvectorStore } = require('ragforge/pgvector');
+
+const rf = createRagforge({
+  llm: 'openai',
+  vectorStore: createPgvectorStore({ client: pool, table: 'docs' }),
+  hybrid: true, // uses searchText, the Postgres full-text search
+});
+```
+
+Every adapter returns `{ id, content, score, metadata }`, so `evaluate()` runs against production data as it is. Pass `documents` to evaluate and a store is built in memory instead. Supabase needs a function like this:
+
+```sql
+create function match_documents(query_embedding vector(1536), match_count int)
+returns table (id bigint, content text, similarity float)
+language sql stable as $$
+  select id, content, 1 - (embedding <=> query_embedding) as similarity
+  from documents order by embedding <=> query_embedding limit match_count;
+$$;
+```
+
+The adapters have mock-based tests. Only the Qdrant client is installed in this repo, so the others have not been run against a live database.
 
 <details>
 <summary><b>Pinecone, Weaviate, pgvector</b></summary>

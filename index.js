@@ -4,7 +4,7 @@
 // The top-level functions below are the v1 API, kept working through a lazily
 // created default instance (OpenAI, key from OPENAI_API_KEY).
 const { createRagforge } = require("./src/createRagforge");
-const { createOpenAIProvider, createOllamaProvider } = require("./src/providers");
+const { createOpenAIProvider, createOllamaProvider, createAnthropicProvider, createGeminiProvider, createMistralProvider, createCohereProvider, createLocalProvider } = require("./src/providers");
 const { createMemoryCache } = require("./src/core/cache");
 const { createLLMReranker, createCohereReranker, createJinaReranker } = require("./src/rerankers");
 const { DEFAULT_PRICING } = require("./src/core/pricing");
@@ -15,6 +15,7 @@ const { chunkText } = require("./src/eval/chunk");
 const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
+const { startMcpServer } = require("./src/mcp/server");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -24,6 +25,11 @@ module.exports = {
   createRagforge,
   createOpenAIProvider,
   createOllamaProvider,
+  createAnthropicProvider,
+  createGeminiProvider,
+  createMistralProvider,
+  createCohereProvider,
+  createLocalProvider,
   createMemoryCache,
   createLLMReranker,
   createCohereReranker,
@@ -38,6 +44,7 @@ module.exports = {
   classifyQuery,
   DEFAULT_RULES,
   DEFAULT_PRICING,
+  startMcpServer,
 
   // v1 API (default instance)
   hyde: (query, options) => getDefault().hyde(query, options),
