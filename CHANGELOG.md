@@ -2,7 +2,7 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
-## [Unreleased] 2.2.0
+## [2.2.0] - 2026-11-13
 
 Reach: ragforge works inside the AI coding tools developers already use.
 
@@ -17,7 +17,7 @@ Reach: ragforge works inside the AI coding tools developers already use.
 - **Local embeddings, no API key.** `local` runs a small embedding model in-process with the optional `@huggingface/transformers` package (default `Xenova/bge-small-en-v1.5`). Use it with `createRagforge({ embeddings: 'local' })`, `npx ragforge mcp --embeddings local`, or `npx ragforge eval --provider local --questions-file ...` for a free retrieval-only eval. `createLocalProvider()` is exported. The model is downloaded on first use.
 
 - **Vector store adapters.** `ragforge/pgvector`, `ragforge/qdrant`, `ragforge/chroma`, `ragforge/pinecone`, `ragforge/lancedb` and `ragforge/supabase`. Each wraps a client you already have (no database package is loaded by ragforge) and returns `{ id, content, score, metadata }`, so `evaluate()` works against production data. The pgvector adapter also adds `searchText` (Postgres full-text search) for hybrid retrieval.
-- The package now has an `exports` map. The root and `./package.json` are unchanged, and deep imports into `src/` are no longer public.
+- The package now has an `exports` map for the adapter subpaths. The root import is unchanged, and deep imports such as `ragforge/src/cli` keep working.
 
 - **Streaming answers.** `rf.auto(q, { stream: true })` and `rf.ragPipeline(q, { stream: true })` return the sources and route right away, plus a `stream` of answer tokens. `answer`, `citations`, `done` and `stats` resolve once the stream has ended. OpenAI, Ollama and Anthropic stream tokens. Other providers fall back to a single chunk. Providers can add a `chatStream` generator.
 
@@ -95,6 +95,7 @@ Most code needs no changes: `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, 
 
 First stable release with HyDE, Chain-of-Thought, Step-Back, Fan-Out, RRF and the RAG pipeline.
 
+[2.2.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/Kamraanmulani/ragforge/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/Kamraanmulani/ragforge/releases/tag/v1.1.0
