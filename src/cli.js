@@ -31,6 +31,10 @@ Options:
   --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
                             adds rerank and hybrid+rerank to the default techniques
   --rerank-candidates <n>   Candidates retrieved before reranking (default 20)
+  --answers                 Also grade answer quality with an LLM judge: faithfulness,
+                            answer relevance, context recall and citation accuracy
+                            (about 4 more LLM calls per question and technique)
+  --judge-model <name>      Chat model that grades the answers (default: same as --model)
   --provider <name>         openai (eval default), ollama, anthropic, gemini, mistral, cohere
                             or local (embeddings in-process, no key; eval then needs --questions-file)
                             mcp: omit for keyword search only; set it to enable ask
@@ -46,8 +50,9 @@ Options:
   --json <file>             Write full results as JSON
   --markdown <file>         Write the scoreboard as Markdown (for PR comments)
   --compare <file>          Earlier --json result to compare against; prints what changed
-  --fail-on-drop <points>   With --compare: exit 1 when a technique's hit rate fell by
-                            more than this many points (0 fails on any drop)
+  --fail-on-drop <points>   With --compare: exit 1 when a technique's hit rate (or its
+                            faithfulness, with --answers) fell by more than this many
+                            points (0 fails on any drop)
   -h, --help                Show this help
 
 MCP options (mcp command):
@@ -62,6 +67,7 @@ Examples:
   npx ragforge eval --docs ./docs --provider ollama --model qwen2.5 --html report.html
   npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
   npx ragforge eval --docs ./docs --reranker cohere
+  npx ragforge eval --docs ./docs --answers --techniques baseline,hybrid
   npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
   npx ragforge eval --docs ./docs --questions-file golden.json --compare main.json --fail-on-drop 3
 `;
@@ -159,6 +165,8 @@ async function main(argv, io = {}) {
         "embedding-model": { type: "string" },
         reranker: { type: "string" },
         "rerank-candidates": { type: "string" },
+        answers: { type: "boolean" },
+        "judge-model": { type: "string" },
         "top-k": { type: "string" },
         "chunk-size": { type: "string" },
         concurrency: { type: "string" },
@@ -202,6 +210,7 @@ async function main(argv, io = {}) {
     if (failOnDrop !== undefined && !values.compare) throw new Error("--fail-on-drop needs --compare <file>");
     const baseline = values.compare ? readJson(path.resolve(cwd, values.compare), "--compare") : null;
     if (baseline) compareEvals(baseline, baseline);
+    if (values["judge-model"] && !values.answers) throw new Error("--judge-model needs --answers");
 
     const embeddingsName = embeddingsProviderName(values, provider);
     const rf = factory({
@@ -226,8 +235,10 @@ async function main(argv, io = {}) {
       rerankCandidates: toInt(values["rerank-candidates"], "rerank-candidates"),
       chunkSize: toInt(values["chunk-size"], "chunk-size"),
       concurrency: toInt(values.concurrency, "concurrency"),
+      answers: values.answers,
+      judgeOptions: values["judge-model"] ? { model: values["judge-model"] } : undefined,
       onProgress: ({ phase, done, total }) => {
-        const label = { index: "Indexing chunks", questions: "Generating questions", run: "Running techniques" }[phase];
+        const label = { index: "Indexing chunks", questions: "Generating questions", run: "Running techniques", answers: "Writing and grading answers" }[phase];
         if (live) {
           if (phase !== lastPhase && lastPhase !== null) stderr.write("\n");
           stderr.write(`\r${label}: ${done}/${total}`);

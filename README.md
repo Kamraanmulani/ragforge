@@ -124,6 +124,8 @@ npx ragforge eval --docs ./docs
 | `--embedding-model <name>` | provider default | Embedding model |
 | `--reranker <name>` | | `llm`, `cohere` or `jina`; adds `rerank` and `hybrid+rerank` to the techniques |
 | `--rerank-candidates <n>` | `20` | Candidates retrieved before reranking |
+| `--answers` | | Also grade answer quality with an LLM judge. See [Answer quality](#answer-quality) |
+| `--judge-model <name>` | same as `--model` | Chat model that grades the answers |
 | `--top-k <n>` | `5` | Results per search |
 | `--chunk-size <n>` | `800` | Max characters per chunk |
 | `--concurrency <n>` | `4` | Parallel requests |
@@ -160,6 +162,43 @@ await rf.evaluate({
 ```
 
 </details>
+
+### Answer quality
+
+Finding the right chunk doesn't guarantee a correct answer. Add `--answers` to grade the answers too:
+
+```bash
+npx ragforge eval --docs ./docs --answers
+```
+
+For every technique, ragforge writes an answer from the passages that technique retrieved, with the same prompt `ragPipeline` and `auto` use, and an LLM judge grades it. The scores sit next to the retrieval scores. This is a run on this README, with 10 questions and `--techniques baseline,hybrid,hyde`:
+
+```
+technique   hit@5   MRR     faithful   relevance   ctx recall   citations   latency   cost/query   LLM calls   errors
+---------   -----   -----   --------   ---------   ----------   ---------   -------   ----------   ---------   ------
+hybrid ★    100%    0.883   75% ±10    100%        100%         71% ±20     293ms     $0.000001    0
+baseline    90%     0.708   61% ±19    100%        94% ±12      72% ±17     316ms     $0.000001    0
+hyde        70%     0.583   68% ±14    100%        76% ±25      70% ±12     6.8s      $0.000326    1
+
+Answers: 30 written and graded by gpt-4o-mini (judge v1), cost $0.0372. ± is the 95% interval across questions.
+```
+
+| Column | What it measures |
+|---|---|
+| `faithful` | Share of the answer's claims that the retrieved passages support. Low means the model made things up |
+| `relevance` | Whether the answer addresses the question: fully, partly or not at all |
+| `ctx recall` | Share of the facts needed for the answer that were retrieved. Unlike hit@k, it gives credit when another passage holds the answer |
+| `citations` | Share of the answer's `[1]`-style citations that point at a passage supporting the statement. An answer with claims and no citations scores 0 |
+
+- **Cost.** About 4 extra LLM calls per question and technique: one answer, and a judge call for each metric that needs one. Techniques that retrieved the same passages share one answer and one set of grades. Latency and cost per query in the table stay retrieval-only, and the answer cost is reported on its own line.
+- **A judge that has to show its evidence.** For every claim, fact or citation it accepts, the judge must quote the passage, and ragforge checks that the quote is really there. A "yes" without a valid quote counts as a "no". Asked for a plain yes or no, judge models approve almost everything.
+- **See what went wrong.** In the `--json` result, each question's run has `findings`: the `unsupportedClaims`, `missingFacts` and `wrongCitations` behind a low score.
+- **Judge noise.** The judge runs at temperature 0 with fixed, versioned prompts, and `±` shows how far each mean could be off with this many questions. With 10 questions the intervals are wide, so use `--questions 30` or more before trusting small differences.
+- **A stronger judge.** `--judge-model gpt-4o` grades with a different model than the one that writes the answers.
+- **In CI.** With `--answers` on both runs, `--fail-on-drop` also fails on a faithfulness drop. Scores are only compared between runs graded by the same judge model and judge version.
+- **Reference answers.** For your own questions, add `expectedAnswer` and context recall is judged against it when the expected chunk was missed.
+
+From code: `rf.evaluate({ documents, answers: true, judgeOptions: { model: 'gpt-4o' } })`. Each row gets an `answers` object with the four scores and their intervals, and each question's runs keep the `answer` and its `scores`.
 
 ### Documents
 
@@ -208,7 +247,7 @@ baseline    87% → 73%   -13.4   0.741 → 0.652   -0.089   38ms → 40ms   $0.
 ```
 
 - `--compare <file>` prints what changed against an earlier `--json` result. On its own it never fails the build.
-- `--fail-on-drop <points>` exits with code 1 when any technique in both runs lost **more than** that many points of hit@k. `0` fails on any drop. Limit what is checked with `--techniques`.
+- `--fail-on-drop <points>` exits with code 1 when any technique in both runs lost **more than** that many points of hit@k (or of faithfulness, when both runs used `--answers`). `0` fails on any drop. Limit what is checked with `--techniques`.
 - `--questions-file` takes the baseline itself, so there is nothing to write by hand. Each generated question is matched on the opening words of the passage it came from, so a passage that moved to another chunk still counts and one that was removed or rewritten is a miss. For questions that should survive rewrites, write your own: `[{ "question": "...", "expectedText": "..." }]`.
 - `--markdown <file>` writes the scoreboard (with the comparison) as Markdown.
 - ragforge warns when the two runs can't be compared fairly: different questions, a different top-k or a different embedding model.
@@ -658,14 +697,14 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 
 **Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `citations` (true), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

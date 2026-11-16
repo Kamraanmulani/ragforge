@@ -10,6 +10,7 @@ const { generalQuestion } = require("../techniques/stepback");
 const { subQuestions } = require("../techniques/fanout");
 const { chunkDocuments } = require("./chunk");
 const { createMemoryVectorStore } = require("./memoryVectorStore");
+const { judgeAnswer, summarizeAnswers, JUDGE_VERSION } = require("./judge");
 
 const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 
@@ -218,7 +219,10 @@ function recommend(ranked, topK, minImprovement) {
  * @param {number} [options.chunkSize=800]
  * @param {number} [options.concurrency=4]
  * @param {number} [options.minImprovement=0.05] - Hit-rate gain needed to recommend over baseline
- * @param {object} [options.llmOptions] - LLM options for techniques and question generation
+ * @param {object} [options.llmOptions] - LLM options for techniques, question generation and answers
+ * @param {boolean} [options.answers=false] - Also write an answer from each technique's passages and
+ *   grade it with an LLM judge: faithfulness, answer relevance, context recall, citation accuracy
+ * @param {object} [options.judgeOptions] - LLM options for the judge, e.g. { model } (default: llmOptions at temperature 0)
  * @param {function} [options.onProgress] - ({ phase, done, total }) => void
  */
 async function evaluate(config, options = {}) {
@@ -232,6 +236,8 @@ async function evaluate(config, options = {}) {
     concurrency = 4,
     minImprovement = 0.05,
     llmOptions = {},
+    answers = false,
+    judgeOptions = {},
     onProgress = () => {},
   } = options;
 
@@ -251,6 +257,9 @@ async function evaluate(config, options = {}) {
   }
   if (!questionStyles.length || questionStyles.some((s) => !QUESTION_STYLES[s])) {
     throw new Error(`[ragforge] evaluate: questionStyles must be some of ${Object.keys(QUESTION_STYLES).join(", ")}`);
+  }
+  if (answers && config.llm.chatModel === null) {
+    throw new Error(`[ragforge] evaluate: answers need a chat model, and the ${config.llm.name} provider has none. Use a chat provider for llm and keep ${config.embedder.name} for embeddings.`);
   }
   if (!hasDocuments && !config.vectorStore) {
     throw new Error("[ragforge] evaluate needs `documents`, or a vectorStore on the instance plus `questions`");
@@ -322,6 +331,7 @@ async function evaluate(config, options = {}) {
       ranked = ranked.slice(0, topK);
       run.rank = ranked.findIndex((key) => isMatch(items.get(key), key, q)) + 1;
       run.retrieved = ranked;
+      run.passages = ranked.map((key) => extractText(items.get(key)));
     } catch (err) {
       run.error = err.message || String(err);
     }
@@ -330,9 +340,45 @@ async function evaluate(config, options = {}) {
     return run;
   });
 
-  // 4. Score
-  const rows = techniques.map((t) => summarize(t, runs.filter((r) => r.technique === t)));
+  // 4. Answers (optional): write an answer from what each technique retrieved, then grade it.
+  // Usage is tracked apart from the techniques', so cost per query stays the cost of retrieval.
+  const answerTracker = createTracker(config.pricing);
+  if (answers) {
+    const answerCtx = createCallContext(config, answerTracker);
+    // Techniques that retrieved the same passages in the same order share one answer and one
+    // set of grades: fewer calls, and identical input can't get two different scores
+    const jobs = new Map();
+    for (const run of runs) {
+      if (run.error) continue;
+      const key = `${run.questionIndex}\u0000${run.retrieved.join("\u0001")}`;
+      if (!jobs.has(key)) jobs.set(key, { run, shared: [] });
+      jobs.get(key).shared.push(run);
+    }
+    let judged = 0;
+    await mapLimit([...jobs.values()], concurrency, async ({ run, shared }) => {
+      const q = questions[run.questionIndex];
+      const result = await judgeAnswer(answerCtx, {
+        question: q.question,
+        passages: run.passages,
+        hit: run.rank > 0,
+        reference: q.expectedAnswer ?? q.source ?? q.expectedText,
+        answerOptions: llmOptions,
+        judgeOptions: { ...llmOptions, ...judgeOptions },
+      });
+      for (const r of shared) r.judged = result;
+      onProgress({ phase: "answers", done: ++judged, total: jobs.size });
+    });
+  }
+
+  // 5. Score
+  const rows = techniques.map((t) => {
+    const own = runs.filter((r) => r.technique === t);
+    const row = summarize(t, own);
+    if (answers) row.answers = summarizeAnswers(own.filter((r) => r.judged).map((r) => r.judged));
+    return row;
+  });
   const ranked = rankRows(rows);
+  const answerUsage = answerTracker.snapshot();
 
   return {
     topK,
@@ -350,12 +396,36 @@ async function evaluate(config, options = {}) {
     ranking: ranked.map((r) => r.technique),
     best: ranked[0].technique,
     recommendation: recommend(ranked, topK, minImprovement),
+    ...(answers && {
+      answers: {
+        judgeVersion: JUDGE_VERSION,
+        judgeModel: judgeOptions.model ?? llmOptions.model ?? config.defaults.model ?? config.llm.chatModel,
+        // Answers written and graded; fewer than questions x techniques when techniques retrieved the same passages
+        generated: new Set(runs.filter((r) => r.judged?.answer).map((r) => r.judged)).size,
+        usage: answerUsage,
+      },
+    }),
     questions: questions.map((q, qi) => ({
       ...q,
       runs: Object.fromEntries(
         runs
           .filter((r) => r.questionIndex === qi)
-          .map((r) => [r.technique, { rank: r.rank, queries: r.queries, retrieved: r.retrieved, error: r.error }])
+          .map((r) => [
+            r.technique,
+            {
+              rank: r.rank,
+              queries: r.queries,
+              retrieved: r.retrieved,
+              error: r.error,
+              ...(r.judged && {
+                answer: r.judged.answer,
+                scores: r.judged.scores,
+                // What lowered a score: unsupportedClaims, missingFacts, wrongCitations
+                ...(Object.keys(r.judged.findings).length && { findings: r.judged.findings }),
+                ...(Object.keys(r.judged.errors).length && { judgeErrors: r.judged.errors }),
+              }),
+            },
+          ])
       ),
     })),
   };

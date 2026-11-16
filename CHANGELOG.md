@@ -6,6 +6,12 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **Answer-quality eval.** `npx ragforge eval --answers` (or `evaluate({ answers: true })`) writes an answer from each technique's passages, with the pipeline's own prompt, and grades it with an LLM judge. Four new columns sit next to the retrieval scores: **faithfulness** (claims supported by the passages), **answer relevance**, **context recall** and **citation accuracy**, each with a 95% interval across questions. `--judge-model` (`judgeOptions`) picks a different model for the judge.
+- The judge has to quote the passage for every claim, fact or citation it accepts, and the quote is checked in code. A verdict without a valid quote doesn't count. Each question's run lists what lowered its scores in `findings`.
+- Judge prompts are fixed and versioned (`JUDGE_VERSION`, in the result as `answers.judgeVersion`) and run at temperature 0, so scores stay comparable between runs.
+- Techniques that retrieved the same passages share one answer and one set of grades. Answer and judge usage is reported apart from the techniques' cost and latency, which stay retrieval-only.
+- Questions can carry an `expectedAnswer`, used as the reference for context recall.
+- With `--answers` on both runs, `--fail-on-drop` also fails on a faithfulness drop.
 - **CI regression checks.** `npx ragforge eval --compare main.json` prints what changed against an earlier `--json` result: hit@k, MRR, latency and cost for each technique. Add `--fail-on-drop 3` to exit with code 1 when a technique lost more than 3 points of hit@k. It warns when the two runs can't be compared fairly (different questions, top-k or embedding model).
 - `--questions-file` also takes an earlier `--json` result and asks its questions again, so a saved baseline is all a CI check needs. Generated questions are matched on the opening words of their passage, so they follow the content when chunk ids move.
 - `--markdown <file>` writes the scoreboard as Markdown, with the comparison when `--compare` is set.

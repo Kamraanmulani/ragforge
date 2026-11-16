@@ -15,6 +15,7 @@ const { chunkText } = require("./src/eval/chunk");
 const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { compareEvals, formatComparison, renderMarkdownReport } = require("./src/eval/compare");
+const { JUDGE_VERSION } = require("./src/eval/judge");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 const { startMcpServer } = require("./src/mcp/server");
 
@@ -48,6 +49,7 @@ module.exports = {
   classifyQuery,
   DEFAULT_RULES,
   DEFAULT_PRICING,
+  JUDGE_VERSION,
   startMcpServer,
 
   // v1 API (default instance)
