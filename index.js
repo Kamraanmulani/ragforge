@@ -14,6 +14,7 @@ const { createBM25Index } = require("./src/eval/bm25");
 const { chunkText } = require("./src/eval/chunk");
 const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
+const { compareEvals, formatComparison, renderMarkdownReport } = require("./src/eval/compare");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 const { startMcpServer } = require("./src/mcp/server");
 
@@ -41,6 +42,9 @@ module.exports = {
   chunkText,
   formatTable,
   renderHtmlReport,
+  renderMarkdownReport,
+  compareEvals,
+  formatComparison,
   classifyQuery,
   DEFAULT_RULES,
   DEFAULT_PRICING,

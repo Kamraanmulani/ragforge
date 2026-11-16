@@ -1,0 +1,87 @@
+name: ragforge eval
+description: Benchmark RAG retrieval on your docs, fail the build when quality drops, and post the scoreboard on the pull request.
+author: kamraanmulani
+branding:
+  icon: bar-chart-2
+  color: purple
+
+inputs:
+  docs:
+    description: File, folder or URL to evaluate. One per line for several.
+    required: true
+  questions-file:
+    description: JSON file of golden questions ({ question, expectedText }), or an earlier --json result.
+    required: false
+  compare:
+    description: Baseline eval result (written by `ragforge eval --json`) to compare against.
+    required: false
+  fail-on-drop:
+    description: With `compare`, fail when a technique's hit rate fell by more than this many points.
+    required: false
+  provider:
+    description: openai, ollama, anthropic, gemini, mistral, cohere or local. Pass API keys with `env`.
+    required: false
+  embeddings:
+    description: Embedding provider, when it differs from `provider`.
+    required: false
+  techniques:
+    description: Comma-separated techniques, e.g. baseline,hybrid.
+    required: false
+  args:
+    description: Extra `ragforge eval` flags, split on spaces (e.g. `--top-k 3 --chunk-size 500`).
+    required: false
+  packages:
+    description: Extra npm packages to install next to ragforge, separated by spaces (e.g. `@huggingface/transformers` for the local provider, `unpdf` for PDFs).
+    required: false
+  version:
+    description: ragforge version to run.
+    required: false
+    default: latest
+  comment:
+    description: "Post the scoreboard as a pull request comment (updated on each run). Needs the `pull-requests: write` permission."
+    required: false
+    default: "true"
+  github-token:
+    description: Token used to post the comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  passed:
+    description: "`true` when the eval ran and no technique regressed."
+    value: ${{ steps.eval.outputs.passed }}
+  markdown:
+    description: Path of the Markdown scoreboard.
+    value: ${{ steps.eval.outputs.markdown }}
+  json:
+    description: Path of the full JSON result. Upload or commit it to use as the next baseline.
+    value: ${{ steps.eval.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run ragforge eval
+      id: eval
+      shell: bash
+      env:
+        INPUT_DOCS: ${{ inputs.docs }}
+        INPUT_QUESTIONS_FILE: ${{ inputs.questions-file }}
+        INPUT_COMPARE: ${{ inputs.compare }}
+        INPUT_FAIL_ON_DROP: ${{ inputs.fail-on-drop }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_EMBEDDINGS: ${{ inputs.embeddings }}
+        INPUT_TECHNIQUES: ${{ inputs.techniques }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_PACKAGES: ${{ inputs.packages }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/action/eval.sh"
+
+    - name: Comment on the pull request
+      if: ${{ always() && inputs.comment == 'true' && github.event.pull_request.number && steps.eval.outputs.markdown }}
+      shell: bash
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPORT: ${{ steps.eval.outputs.markdown }}
+      run: bash "$GITHUB_ACTION_PATH/action/comment.sh"

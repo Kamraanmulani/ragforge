@@ -115,7 +115,7 @@ npx ragforge eval --docs ./docs
 |---|---|---|
 | `--docs <path\|url>` | | File, folder or http(s) URL, repeatable. See [Documents](#documents) |
 | `--questions <n>` | `10` | Questions to generate |
-| `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]` |
+| `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]`, or an earlier `--json` result |
 | `--question-styles <list>` | `question,keywords,conceptual` | Which generated query styles to mix |
 | `--techniques <list>` | `baseline,hybrid,hyde,stepback,fanout` | Also `cot`; combine with `+`, e.g. `hybrid+hyde` |
 | `--provider <name>` | `openai` | `openai` or `ollama` |
@@ -129,6 +129,9 @@ npx ragforge eval --docs ./docs
 | `--concurrency <n>` | `4` | Parallel requests |
 | `--html <file>` | | Shareable report, works in light and dark mode |
 | `--json <file>` | | Full results, usable with `auto({ from })` |
+| `--markdown <file>` | | Scoreboard as Markdown, for pull request comments |
+| `--compare <file>` | | Earlier `--json` result to compare against. See [CI](#catch-retrieval-regressions-in-ci) |
+| `--fail-on-drop <points>` | | With `--compare`: exit 1 when hit@k fell by more than this many points |
 
 With OpenAI, a 10-question run on the default techniques makes about 40 small `gpt-4o-mini` calls plus embeddings. The scoreboard shows the exact cost.
 
@@ -178,6 +181,83 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 ```
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
+
+## Catch retrieval regressions in CI
+
+Retrieval quality drops quietly when docs, chunking or models change. Save a baseline once, then compare every later run against it:
+
+```bash
+# Once, on your main branch: generate questions and save the result
+npx ragforge eval --docs ./docs --techniques baseline,hybrid --questions 30 --json ragforge-baseline.json
+```
+
+```bash
+# In CI: ask the same questions again and fail if a score dropped
+npx ragforge eval --docs ./docs --techniques baseline,hybrid --questions-file ragforge-baseline.json --compare ragforge-baseline.json --fail-on-drop 3
+```
+
+```
+Compared with ragforge-baseline.json
+
+technique   hit@5       Δ pts   MRR             Δ        latency       cost/query
+---------   ---------   -----   -------------   ------   -----------   ---------------------   -----------
+hybrid      90% → 90%   0       0.812 → 0.812   0.000    41ms → 39ms   $0.000002 → $0.000002
+baseline    87% → 73%   -13.4   0.741 → 0.652   -0.089   38ms → 40ms   $0.000002 → $0.000002   ✗ regressed
+
+✗ Regression: baseline lost 13.4 points of hit@5 (allowed: 3).
+```
+
+- `--compare <file>` prints what changed against an earlier `--json` result. On its own it never fails the build.
+- `--fail-on-drop <points>` exits with code 1 when any technique in both runs lost **more than** that many points of hit@k. `0` fails on any drop. Limit what is checked with `--techniques`.
+- `--questions-file` takes the baseline itself, so there is nothing to write by hand. Each generated question is matched on the opening words of the passage it came from, so a passage that moved to another chunk still counts and one that was removed or rewritten is a miss. For questions that should survive rewrites, write your own: `[{ "question": "...", "expectedText": "..." }]`.
+- `--markdown <file>` writes the scoreboard (with the comparison) as Markdown.
+- ragforge warns when the two runs can't be compared fairly: different questions, a different top-k or a different embedding model.
+
+`baseline` and `hybrid` make no LLM calls, so their scores are the same on every run. Techniques that call an LLM (`hyde`, `stepback`, `fanout`) vary a little between runs, so give them a larger `--fail-on-drop`. When a drop is expected (you rewrote the docs), re-run the first command and commit the new baseline.
+
+### GitHub Action
+
+The action runs the eval, adds the scoreboard to the job summary, and posts it as a pull request comment that is updated on every push.
+
+```yaml
+# .github/workflows/rag-eval.yml
+name: rag eval
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write # for the comment
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kamraanmulani/ragforge@v2.3.0
+        with:
+          docs: ./docs
+          techniques: baseline,hybrid
+          questions-file: ragforge-baseline.json
+          compare: ragforge-baseline.json
+          fail-on-drop: 3
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+To run it with no API key, embed locally. Create the baseline with `--embeddings local` (after `npm install @huggingface/transformers`), then use `provider: local` and `packages: "@huggingface/transformers"` in the workflow and drop the `env` block.
+
+| Input | |
+|---|---|
+| `docs` | File, folder or URL. One per line for several. Required |
+| `questions-file`, `compare`, `fail-on-drop`, `provider`, `embeddings`, `techniques` | Same as the CLI flags |
+| `args` | Any other `ragforge eval` flags, e.g. `--top-k 3 --chunk-size 500` |
+| `packages` | Extra npm packages to install next to ragforge, e.g. `unpdf` for PDFs |
+| `version` | ragforge version to run (default `latest`) |
+| `comment` | `false` to skip the pull request comment (default `true`) |
+
+Outputs: `passed` (`true` or `false`), `markdown` and `json` (paths of the reports). Pull requests from forks get a read-only token, so the comment is skipped there and the check still runs.
+
+From code, `compareEvals(baseline, result, { failOnDrop: 3 })` returns `{ rows, regressions, passed, warnings }`, and `formatComparison()` and `renderMarkdownReport()` print it.
 
 ## MCP server for coding agents
 
@@ -375,7 +455,6 @@ Local embeddings run a small model in-process with `@huggingface/transformers`, 
 On the CLI: `npx ragforge eval --docs ./docs --provider gemini`, or `--provider anthropic --embeddings openai`. The API keys are read from the environment or a `.env` file, and only when a call needs them.
 
 Prices for the built-in models are in `DEFAULT_PRICING`. Models without a verified price, such as the Gemini and Mistral embedding models, report `costUSD: null` (unknown) instead of a guess. Add your own with `createRagforge({ pricing })`.
-```
 
 <details>
 <summary><b>Custom models, endpoints and providers</b></summary>
@@ -586,7 +665,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

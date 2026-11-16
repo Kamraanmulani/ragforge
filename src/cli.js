@@ -1,10 +1,11 @@
-// `ragforge` command line: currently the `eval` command
+// `ragforge` command line: the `eval` and `mcp` commands
 const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("util");
 const { createRagforge } = require("./createRagforge");
 const { createBuiltInProvider, builtInProviderNames, supportsEmbeddings } = require("./providers");
 const { formatTable, renderHtmlReport } = require("./eval/report");
+const { compareEvals, formatComparison, renderMarkdownReport } = require("./eval/compare");
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
 const { loadDocuments } = require("./loaders");
 const { startMcpServer } = require("./mcp/server");
@@ -20,7 +21,8 @@ Options:
   --docs <path|url>         File, folder or http(s) URL (repeatable). Reads .txt, .md,
                             .mdx, .rst, .html, .pdf (npm i unpdf), .docx (npm i mammoth)
   --questions <n>           Questions to generate from the docs (default 10)
-  --questions-file <file>   JSON array of { question, expectedText } to use instead
+  --questions-file <file>   JSON array of { question, expectedText } to use instead,
+                            or an earlier --json result (reuses its questions)
   --question-styles <list>  Generated mix (default question,keywords,conceptual)
   --techniques <list>       Comma-separated (default ${DEFAULT_TECHNIQUES.join(",")})
                             Available: baseline, hybrid, rerank, hyde, cot, stepback, fanout;
@@ -42,6 +44,10 @@ Options:
   --concurrency <n>         Parallel requests (default 4)
   --html <file>             Write a shareable HTML report
   --json <file>             Write full results as JSON
+  --markdown <file>         Write the scoreboard as Markdown (for PR comments)
+  --compare <file>          Earlier --json result to compare against; prints what changed
+  --fail-on-drop <points>   With --compare: exit 1 when a technique's hit rate fell by
+                            more than this many points (0 fails on any drop)
   -h, --help                Show this help
 
 MCP options (mcp command):
@@ -57,6 +63,7 @@ Examples:
   npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
   npx ragforge eval --docs ./docs --reranker cohere
   npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
+  npx ragforge eval --docs ./docs --questions-file golden.json --compare main.json --fail-on-drop 3
 `;
 
 function makeProvider(name, { chatModel, embeddingModel } = {}) {
@@ -80,6 +87,46 @@ function toInt(value, name) {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1) throw new Error(`--${name} must be a positive whole number`);
   return n;
+}
+
+// --fail-on-drop: points of hit rate, 0 or more (decimals allowed)
+function toPoints(value) {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (value.trim() === "" || !Number.isFinite(n) || n < 0) throw new Error("--fail-on-drop must be a number of points, 0 or more");
+  return n;
+}
+
+function readJson(file, flag) {
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    throw new Error(`${flag}: cannot read ${file}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${flag}: ${file} is not valid JSON (${err.message})`);
+  }
+}
+
+// A JSON array of questions, or an earlier --json result whose questions are reused.
+// Generated questions point at a chunk id, and ids move when the docs or the chunk
+// size change. They are matched on the opening words of their passage instead, so
+// the check follows the content: a passage that moved still counts, one that was
+// removed or rewritten doesn't.
+function readQuestions(file) {
+  const data = readJson(file, "--questions-file");
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.questions)) {
+    return data.questions.map(({ runs, ...question }) => {
+      if (typeof question.source !== "string" || question.expectedText != null) return question;
+      const { expectedId, ...rest } = question;
+      return { ...rest, expectedText: question.source.trim().split(/\s+/).slice(0, 12).join(" ") };
+    });
+  }
+  throw new Error("--questions-file must be a JSON array of questions, or a result written by --json");
 }
 
 /**
@@ -117,6 +164,9 @@ async function main(argv, io = {}) {
         concurrency: { type: "string" },
         html: { type: "string" },
         json: { type: "string" },
+        markdown: { type: "string" },
+        compare: { type: "string" },
+        "fail-on-drop": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -145,9 +195,13 @@ async function main(argv, io = {}) {
     const documents = await loadDocuments(values.docs ?? [], { cwd });
     if (values.docs && !documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
 
-    const questions = values["questions-file"]
-      ? JSON.parse(fs.readFileSync(path.resolve(cwd, values["questions-file"]), "utf8"))
-      : undefined;
+    const questions = values["questions-file"] ? readQuestions(path.resolve(cwd, values["questions-file"])) : undefined;
+
+    // Read the baseline first, so a bad file fails before any API call is made
+    const failOnDrop = toPoints(values["fail-on-drop"]);
+    if (failOnDrop !== undefined && !values.compare) throw new Error("--fail-on-drop needs --compare <file>");
+    const baseline = values.compare ? readJson(path.resolve(cwd, values.compare), "--compare") : null;
+    if (baseline) compareEvals(baseline, baseline);
 
     const embeddingsName = embeddingsProviderName(values, provider);
     const rf = factory({
@@ -187,6 +241,9 @@ async function main(argv, io = {}) {
 
     out(formatTable(result));
 
+    const comparison = baseline ? compareEvals(baseline, result, { failOnDrop }) : null;
+    if (comparison) out(`\n${formatComparison(comparison, { baselineName: values.compare })}`);
+
     if (values.json) {
       fs.writeFileSync(path.resolve(cwd, values.json), JSON.stringify(result, null, 2));
       out(`\nJSON written to ${values.json}`);
@@ -195,7 +252,11 @@ async function main(argv, io = {}) {
       fs.writeFileSync(path.resolve(cwd, values.html), renderHtmlReport(result));
       out(`${values.json ? "" : "\n"}HTML report written to ${values.html}`);
     }
-    return 0;
+    if (values.markdown) {
+      fs.writeFileSync(path.resolve(cwd, values.markdown), renderMarkdownReport(result, { comparison, baselineName: values.compare }));
+      out(`${values.json || values.html ? "" : "\n"}Markdown report written to ${values.markdown}`);
+    }
+    return comparison && !comparison.passed ? 1 : 0;
   } catch (err) {
     stderr.write(`\nError: ${err.message}\n`);
     return 1;

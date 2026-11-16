@@ -2,6 +2,16 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **CI regression checks.** `npx ragforge eval --compare main.json` prints what changed against an earlier `--json` result: hit@k, MRR, latency and cost for each technique. Add `--fail-on-drop 3` to exit with code 1 when a technique lost more than 3 points of hit@k. It warns when the two runs can't be compared fairly (different questions, top-k or embedding model).
+- `--questions-file` also takes an earlier `--json` result and asks its questions again, so a saved baseline is all a CI check needs. Generated questions are matched on the opening words of their passage, so they follow the content when chunk ids move.
+- `--markdown <file>` writes the scoreboard as Markdown, with the comparison when `--compare` is set.
+- **GitHub Action.** `uses: Kamraanmulani/ragforge@v2.3.0` runs the eval, adds the scoreboard to the job summary, posts it as a pull request comment that is updated on each push, and fails the job on a regression.
+- `compareEvals()`, `formatComparison()` and `renderMarkdownReport()` are exported.
+
 ## [2.2.0] - 2026-11-13
 
 Reach: ragforge works inside the AI coding tools developers already use.

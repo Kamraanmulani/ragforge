@@ -432,6 +432,53 @@ export function formatTable(result: EvalResult): string;
 /** Standalone HTML report for an evaluate() result */
 export function renderHtmlReport(result: EvalResult, options?: { title?: string }): string;
 
+/** A score in the baseline and in the current run. `delta` is after minus before, null when either is missing */
+export interface EvalChange {
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+}
+
+export interface EvalComparisonRow {
+  technique: string;
+  /** regressed: hit rate fell by more than failOnDrop points. new / removed: in only one of the runs */
+  status: "regressed" | "down" | "up" | "same" | "new" | "removed";
+  hitRate: EvalChange;
+  mrr: EvalChange;
+  avgLatencyMs: EvalChange;
+  avgCostUSD: EvalChange;
+}
+
+export interface EvalComparison {
+  topK: number;
+  failOnDrop: number | null;
+  rows: EvalComparisonRow[];
+  /** Techniques whose hit rate fell by more than failOnDrop points */
+  regressions: string[];
+  /** false when there is at least one regression */
+  passed: boolean;
+  /** Reasons the two runs may not be comparable (different questions, top-k or embedding model) */
+  warnings: string[];
+}
+
+/** The parts of an eval result a comparison reads, so a result loaded from `--json` works too */
+export type EvalSnapshot = Pick<EvalResult, "topK" | "questionCount" | "results"> & Partial<EvalResult>;
+
+/**
+ * Compare two evaluate() results technique by technique.
+ * With `failOnDrop`, a technique that lost more than that many points of hit rate is a regression.
+ */
+export function compareEvals(baseline: EvalSnapshot, current: EvalSnapshot, options?: { failOnDrop?: number }): EvalComparison;
+
+/** Plain-text diff of two eval results, from compareEvals() */
+export function formatComparison(comparison: EvalComparison, options?: { baselineName?: string }): string;
+
+/** Markdown scoreboard for pull request comments. Pass `comparison` to show each score next to the baseline's */
+export function renderMarkdownReport(
+  result: EvalResult,
+  options?: { comparison?: EvalComparison | null; baselineName?: string; title?: string }
+): string;
+
 /** Rule-based query category, no LLM call */
 export function classifyQuery(query: string): { category: QueryCategory; reason: string };
 
