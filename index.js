@@ -16,6 +16,7 @@ const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { compareEvals, formatComparison, renderMarkdownReport } = require("./src/eval/compare");
 const { JUDGE_VERSION } = require("./src/eval/judge");
+const { createTraceLogger, readTraces } = require("./src/core/trace");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 const { startMcpServer } = require("./src/mcp/server");
 
@@ -50,6 +51,8 @@ module.exports = {
   DEFAULT_RULES,
   DEFAULT_PRICING,
   JUDGE_VERSION,
+  createTraceLogger,
+  readTraces,
   startMcpServer,
 
   // v1 API (default instance)

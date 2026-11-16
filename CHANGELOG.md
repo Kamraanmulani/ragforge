@@ -6,6 +6,11 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **Eval on real queries.** Three steps: log, label, evaluate.
+  - `createRagforge({ onTrace })` is called with a trace of every `auto()` and `ragPipeline()` call: query, route, sources, citations, answer and stats. A file path (`onTrace: 'traces.jsonl'`) appends them as JSONL. `createTraceLogger(file, { includeText: false })` leaves passage text and answers out of the log. A hook that throws never fails the call.
+  - `npx ragforge label --from-logs traces.jsonl --docs ./docs` shows each real query with candidate passages and asks which one answers it. It uses keyword search, so it needs no API key. Labels are saved after every answer and later runs continue where you stopped.
+  - `npx ragforge eval --from-logs traces.jsonl --docs ./docs` runs the eval on the labelled real queries. It works with `--answers`, `--compare` and `--fail-on-drop`.
+  - `readTraces()` is exported.
 - **Answer-quality eval.** `npx ragforge eval --answers` (or `evaluate({ answers: true })`) writes an answer from each technique's passages, with the pipeline's own prompt, and grades it with an LLM judge. Four new columns sit next to the retrieval scores: **faithfulness** (claims supported by the passages), **answer relevance**, **context recall** and **citation accuracy**, each with a 95% interval across questions. `--judge-model` (`judgeOptions`) picks a different model for the judge.
 - The judge has to quote the passage for every claim, fact or citation it accepts, and the quote is checked in code. A verdict without a valid quote doesn't count. Each question's run lists what lowered its scores in `findings`.
 - Judge prompts are fixed and versioned (`JUDGE_VERSION`, in the result as `answers.judgeVersion`) and run at temperature 0, so scores stay comparable between runs.

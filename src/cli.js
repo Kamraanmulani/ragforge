@@ -1,4 +1,4 @@
-// `ragforge` command line: the `eval` and `mcp` commands
+// `ragforge` command line: the `eval`, `label` and `mcp` commands
 const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("util");
@@ -9,11 +9,19 @@ const { compareEvals, formatComparison, renderMarkdownReport } = require("./eval
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
 const { loadDocuments } = require("./loaders");
 const { startMcpServer } = require("./mcp/server");
+const { chunkDocuments } = require("./eval/chunk");
+const { labelQueries, labelledQuestions, openingWords } = require("./eval/label");
+const { readTraces, uniqueQueries, sample, queryKey } = require("./core/trace");
+
+const DEFAULT_LABELS_FILE = "ragforge-labels.json";
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
+       ragforge label --from-logs <file> --docs <file|dir> [options]
        ragforge mcp --docs <file|dir> [options]
 
 eval: benchmarks RAG query techniques on your documents and recommends one.
+label: shows real queries from a trace log and asks which passage answers each one.
+       The labels are saved and used by eval --from-logs. Needs no API key.
 mcp:  serves your documents to coding agents (Claude Code, Cursor, Windsurf) over MCP.
       Tools: search_docs, get_chunk, ask. Works with no API key (keyword search).
 
@@ -47,6 +55,10 @@ Options:
   --chunk-size <n>          Max characters per chunk (default 800)
   --concurrency <n>         Parallel requests (default 4)
   --html <file>             Write a shareable HTML report
+  --from-logs <file>        Evaluate on real queries from a JSONL trace log (written by the
+                            onTrace option) instead of generated ones. Uses the queries
+                            you labelled with "ragforge label"
+  --labels <file>           Labels file for --from-logs and label (default ${DEFAULT_LABELS_FILE})
   --json <file>             Write full results as JSON
   --markdown <file>         Write the scoreboard as Markdown (for PR comments)
   --compare <file>          Earlier --json result to compare against; prints what changed
@@ -54,6 +66,12 @@ Options:
                             faithfulness, with --answers) fell by more than this many
                             points (0 fails on any drop)
   -h, --help                Show this help
+
+Label options (label command):
+  --from-logs <file>        JSONL trace log to take queries from
+  --questions <n>           Unlabelled queries to go through in this session (default 10)
+  --top-k <n>               Passages shown per query (default 8)
+  --labels <file>           Where labels are saved, added to on each run (default ${DEFAULT_LABELS_FILE})
 
 MCP options (mcp command):
   --top-k <n>               Default passages per search_docs / ask call (default 5)
@@ -70,6 +88,8 @@ Examples:
   npx ragforge eval --docs ./docs --answers --techniques baseline,hybrid
   npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
   npx ragforge eval --docs ./docs --questions-file golden.json --compare main.json --fail-on-drop 3
+  npx ragforge label --from-logs traces.jsonl --docs ./docs
+  npx ragforge eval --from-logs traces.jsonl --docs ./docs
 `;
 
 function makeProvider(name, { chatModel, embeddingModel } = {}) {
@@ -129,7 +149,7 @@ function readQuestions(file) {
     return data.questions.map(({ runs, ...question }) => {
       if (typeof question.source !== "string" || question.expectedText != null) return question;
       const { expectedId, ...rest } = question;
-      return { ...rest, expectedText: question.source.trim().split(/\s+/).slice(0, 12).join(" ") };
+      return { ...rest, expectedText: openingWords(question.source) };
     });
   }
   throw new Error("--questions-file must be a JSON array of questions, or a result written by --json");
@@ -172,6 +192,8 @@ async function main(argv, io = {}) {
         concurrency: { type: "string" },
         html: { type: "string" },
         json: { type: "string" },
+        "from-logs": { type: "string" },
+        labels: { type: "string" },
         markdown: { type: "string" },
         compare: { type: "string" },
         "fail-on-drop": { type: "string" },
@@ -191,6 +213,8 @@ async function main(argv, io = {}) {
   }
   if (command === "mcp") return runMcp(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
 
+  if (command === "label") return runLabel(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
+
   if (command !== "eval") {
     stderr.write(`Unknown command "${command}".\n\n${HELP}`);
     return 1;
@@ -203,7 +227,13 @@ async function main(argv, io = {}) {
     const documents = await loadDocuments(values.docs ?? [], { cwd });
     if (values.docs && !documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
 
-    const questions = values["questions-file"] ? readQuestions(path.resolve(cwd, values["questions-file"])) : undefined;
+    if (values["from-logs"] && values["questions-file"]) throw new Error("Use --from-logs or --questions-file, not both");
+    if (values.labels && !values["from-logs"]) throw new Error("--labels needs --from-logs <file>");
+    const questions = values["from-logs"]
+      ? readLoggedQuestions(values, { cwd, stderr })
+      : values["questions-file"]
+        ? readQuestions(path.resolve(cwd, values["questions-file"]))
+        : undefined;
 
     // Read the baseline first, so a bad file fails before any API call is made
     const failOnDrop = toPoints(values["fail-on-drop"]);
@@ -270,6 +300,100 @@ async function main(argv, io = {}) {
     return comparison && !comparison.passed ? 1 : 0;
   } catch (err) {
     stderr.write(`\nError: ${err.message}\n`);
+    return 1;
+  }
+}
+
+function readLabels(file) {
+  if (!fs.existsSync(file)) return [];
+  const data = readJson(file, "--labels");
+  if (!Array.isArray(data)) throw new Error(`--labels: ${file} is not a labels file (expected a JSON array)`);
+  return data;
+}
+
+function readLog(values, cwd) {
+  const { traces, skipped } = readTraces(path.resolve(cwd, values["from-logs"]));
+  if (!traces.length) throw new Error(`--from-logs: no queries found in ${values["from-logs"]}. Expected JSONL with a "query" on each line, as written by onTrace.`);
+  return { queries: uniqueQueries(traces), skipped };
+}
+
+// Real queries from the log that have a label, as eval questions
+function readLoggedQuestions(values, { cwd, stderr }) {
+  let log;
+  try {
+    log = readLog(values, cwd);
+  } catch (err) {
+    if (err.code === "ENOENT") throw new Error(`--from-logs: cannot read ${values["from-logs"]}`);
+    throw err;
+  }
+  const labelsFile = values.labels ?? DEFAULT_LABELS_FILE;
+  const { questions, noAnswer, unlabelled } = labelledQuestions(log.queries, readLabels(path.resolve(cwd, labelsFile)));
+  if (!questions.length) {
+    throw new Error(`None of the ${log.queries.length} queries in ${values["from-logs"]} is labelled yet. Run: ragforge label --from-logs ${values["from-logs"]} --docs <path>`);
+  }
+  const picked = sample(questions, toInt(values.questions, "questions") ?? questions.length);
+  const notes = [`${log.queries.length} different queries in the log`];
+  if (unlabelled) notes.push(`${unlabelled} not labelled yet`);
+  if (noAnswer) notes.push(`${noAnswer} with no answer in the docs`);
+  if (log.skipped) notes.push(`${log.skipped} unreadable lines skipped`);
+  stderr.write(`Using ${picked.length} labelled real queries from ${values["from-logs"]} (${notes.join(", ")}).\n`);
+  return picked;
+}
+
+/**
+ * runLabel
+ * Goes through unlabelled queries from a trace log and saves which passage answers each.
+ * Labels are written after every answer, so quitting never loses work.
+ */
+async function runLabel(values, { stdin, stdout, stderr, cwd }) {
+  try {
+    if (!values["from-logs"]) throw new Error("--from-logs is required, e.g. npx ragforge label --from-logs traces.jsonl --docs ./docs");
+    if (!values.docs) throw new Error("--docs is required: the documents the passages are picked from");
+    let log;
+    try {
+      log = readLog(values, cwd);
+    } catch (err) {
+      if (err.code === "ENOENT") throw new Error(`--from-logs: cannot read ${values["from-logs"]}`);
+      throw err;
+    }
+    const documents = await loadDocuments(values.docs, { cwd });
+    const chunks = chunkDocuments(documents, { size: toInt(values["chunk-size"], "chunk-size") ?? 800 });
+    if (!chunks.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+
+    const labelsName = values.labels ?? DEFAULT_LABELS_FILE;
+    const labelsFile = path.resolve(cwd, labelsName);
+    const labels = readLabels(labelsFile);
+    const done = new Set(labels.map((l) => queryKey(l.question)));
+    const todo = log.queries.filter((q) => !done.has(queryKey(q.query)));
+    if (!todo.length) {
+      stdout.write(`All ${log.queries.length} queries in ${values["from-logs"]} are already labelled in ${labelsName}.\n`);
+      return 0;
+    }
+    // Most-asked queries first: they matter most to real users
+    todo.sort((a, b) => b.count - a.count);
+    const batch = todo.slice(0, toInt(values.questions, "questions") ?? 10);
+    stdout.write(`${log.queries.length} different queries in ${values["from-logs"]}, ${todo.length} not labelled yet. Going through ${batch.length}.\n`);
+
+    const result = await labelQueries({
+      queries: batch,
+      chunks,
+      topK: toInt(values["top-k"], "top-k") ?? 8,
+      input: stdin,
+      output: stdout,
+      onLabel: (label) => {
+        labels.push(label);
+        fs.writeFileSync(labelsFile, `${JSON.stringify(labels, null, 2)}\n`);
+      },
+    });
+
+    const answered = result.labels.filter((l) => !l.noAnswer).length;
+    const none = result.labels.length - answered;
+    stdout.write(`\n\nLabelled ${answered}${none ? `, ${none} with no answer in the docs` : ""}${result.skipped ? `, skipped ${result.skipped}` : ""}. `);
+    stdout.write(result.labels.length ? `Saved to ${labelsName}.\n` : "Nothing saved.\n");
+    if (labels.some((l) => !l.noAnswer)) stdout.write(`Next: npx ragforge eval --from-logs ${values["from-logs"]} --docs ${values.docs.map((d) => (/\s/.test(d) ? `"${d}"` : d)).join(" --docs ")}\n`);
+    return 0;
+  } catch (err) {
+    stderr.write(`Error: ${err.message}\n`);
     return 1;
   }
 }

@@ -116,6 +116,8 @@ npx ragforge eval --docs ./docs
 | `--docs <path\|url>` | | File, folder or http(s) URL, repeatable. See [Documents](#documents) |
 | `--questions <n>` | `10` | Questions to generate |
 | `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]`, or an earlier `--json` result |
+| `--from-logs <file>` | | Real queries from a JSONL trace log, labelled with `ragforge label`. See [real user queries](#evaluate-on-real-user-queries) |
+| `--labels <file>` | `ragforge-labels.json` | Labels file for `--from-logs` |
 | `--question-styles <list>` | `question,keywords,conceptual` | Which generated query styles to mix |
 | `--techniques <list>` | `baseline,hybrid,hyde,stepback,fanout` | Also `cot`; combine with `+`, e.g. `hybrid+hyde` |
 | `--provider <name>` | `openai` | `openai` or `ollama` |
@@ -220,6 +222,48 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 ```
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
+
+## Evaluate on real user queries
+
+Generated questions are tidier than what users actually type. To test on real traffic, log it, label a sample, and run the eval on that.
+
+**1. Log.** `onTrace` records every `auto()` and `ragPipeline()` call. A file path appends one JSON line per call:
+
+```js
+const rf = createRagforge({ vectorStore, onTrace: 'traces.jsonl' });
+// {"timestamp":"...","type":"auto","query":"how do refunds work","route":{...},
+//  "sources":[{"ref":1,"id":"faq#3","score":0.83,"cited":true,"content":"..."}],
+//  "citations":[1],"answer":"...","stats":{"llmCalls":2,"costUSD":0.0004,"latencyMs":1310,...}}
+```
+
+Pass a function instead to send traces anywhere: `onTrace: (trace) => queue.push(trace)`. To keep passage text and answers out of the log, use `onTrace: createTraceLogger('traces.jsonl', { includeText: false })`. A hook that throws is logged and never fails the call. Streamed answers are traced when the stream ends.
+
+**2. Label.** Go through the queries in the terminal and mark the passage that answers each one. It uses keyword search over your docs, so it needs no API key:
+
+```bash
+npx ragforge label --from-logs traces.jsonl --docs ./docs
+```
+
+```
+[1/10] how do refunds work  (asked 14 times)
+  1. docs/billing.md#4
+     Refunds are issued to the original payment method within 5 business days…
+  2. docs/faq.md#2
+     You can cancel at any time from the account page…
+Which passage answers it? number, n = none, s = skip, q = save and quit, or words to search for:
+```
+
+Type a number to pick a passage, `n` when the docs don't answer the query, `s` to skip, or other words to search again. The most-asked queries come first. Labels are saved to `ragforge-labels.json` after every answer, and the next run continues with the queries that are left (`--questions <n>` sets how many per session, default 10).
+
+**3. Evaluate.**
+
+```bash
+npx ragforge eval --from-logs traces.jsonl --docs ./docs
+```
+
+This runs the usual scoreboard on your labelled real queries instead of generated ones. It works with `--answers`, `--compare` and `--fail-on-drop`. Queries marked `n` are left out and counted: they are gaps in your docs, not retrieval failures.
+
+Any JSONL file with a `query` (or `question`) on each line works as a log, so you can export queries from your own analytics. Labels are matched to passages by their opening words, so they survive re-chunking; re-label a query when its passage is rewritten.
 
 ## Catch retrieval regressions in CI
 
@@ -646,6 +690,7 @@ Without a vector store, techniques still work: HyDE returns its hypothetical doc
 const rf = createRagforge({
   cache: true,   // in-memory LRU (1000 entries), or any { get, set } such as Redis
   debug: true,   // log progress; silent by default. Or pass logger: { info, error }
+  onTrace: 'traces.jsonl', // log every auto() and ragPipeline() call, see "Evaluate on real user queries"
 });
 
 const { stats } = await rf.ragPipeline('What is overfitting?');
@@ -704,7 +749,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

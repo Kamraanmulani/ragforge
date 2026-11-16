@@ -126,6 +126,26 @@ export interface RagforgeOptions {
   defaults?: LLMOptions;
   debug?: boolean;
   logger?: { info?: (msg: string) => void; error?: (msg: string) => void };
+  /**
+   * Called with a trace of every auto() and ragPipeline() call. A file path appends
+   * the traces to that file as JSONL, for `ragforge label` and `eval --from-logs`.
+   * A hook that throws is logged and never fails the call.
+   */
+  onTrace?: ((trace: Trace) => void) | string;
+}
+
+/** One auto() or ragPipeline() call: what was asked, how it was routed, what the answer was written from */
+export interface Trace {
+  /** ISO 8601 */
+  timestamp: string;
+  type: "auto" | "ragPipeline";
+  query: string;
+  /** null for ragPipeline() */
+  route: { technique: string; category: string; decidedBy: string; reason: string } | null;
+  sources: Array<{ ref: number; id: string | number | null; score: number | null; cited: boolean; content?: string }>;
+  citations: number[];
+  answer?: string | null;
+  stats: Stats | null;
 }
 
 export interface CotResult {
@@ -534,6 +554,15 @@ export function renderMarkdownReport(
   result: EvalResult,
   options?: { comparison?: EvalComparison | null; baselineName?: string; title?: string }
 ): string;
+
+/**
+ * An onTrace hook that appends each trace to a JSONL file.
+ * `includeText: false` leaves out passage text and answers, keeping queries, routes, source ids and stats.
+ */
+export function createTraceLogger(file: string, options?: { includeText?: boolean }): (trace: Trace) => void;
+
+/** Reads a JSONL trace file. Lines that aren't JSON or have no query are skipped and counted */
+export function readTraces(file: string): { traces: Trace[]; skipped: number };
 
 /** Version of the fixed judge prompts used by evaluate({ answers: true }) */
 export const JUDGE_VERSION: number;

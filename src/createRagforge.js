@@ -6,6 +6,7 @@ const { resolveReranker } = require("./rerankers");
 const { DEFAULT_PRICING } = require("./core/pricing");
 const { createCallContext } = require("./core/context");
 const { resolveLogger } = require("./core/utils");
+const { buildTrace, resolveTrace } = require("./core/trace");
 const { hyde } = require("./techniques/hyde");
 const { cot } = require("./techniques/cot");
 const { stepback } = require("./techniques/stepback");
@@ -30,6 +31,8 @@ const { route, pipelineTechniques, usesHybrid, usesRerank } = require("./router/
  * @param {object} [options.defaults] - Default LLM options (model, temperature, ...)
  * @param {boolean} [options.debug] - Log progress to console
  * @param {object} [options.logger] - Custom { info, error } logger
+ * @param {function|string} [options.onTrace] - Called with a trace of every auto() and ragPipeline() call
+ *   (query, route, sources, answer, stats). A file path appends the traces to that file as JSONL
  */
 function createRagforge(options = {}) {
   const llm = resolveProvider(options.llm ?? "openai");
@@ -47,6 +50,17 @@ function createRagforge(options = {}) {
     pricing: { ...DEFAULT_PRICING, ...options.pricing },
     defaults: { ...defaults, ...options.defaults },
   };
+  const onTrace = resolveTrace(options.onTrace);
+
+  // Tracing is for observing: a failing hook must never fail the call it observes
+  function trace(type, result) {
+    if (!onTrace) return;
+    try {
+      onTrace(buildTrace(type, result));
+    } catch (err) {
+      config.logger.error(`[ragforge] onTrace failed: ${err.message || err}`);
+    }
+  }
 
   // Each public call gets its own context so stats never mix between calls
   async function run(fn, callOptions = {}) {
@@ -57,12 +71,17 @@ function createRagforge(options = {}) {
     return result;
   }
 
-  // Adds stats to a pipeline result. For a stream, stats resolve after the last token.
-  function withStats(ctx, result, callOptions) {
-    if (!result.stream) return { ...result, stats: ctx.tracker.snapshot() };
-    const stats = result.done.then(() => {
+  // Adds stats to a pipeline result and traces the call. For a stream, both happen after the last token.
+  function withStats(ctx, result, callOptions, type) {
+    if (!result.stream) {
+      const finished = { ...result, stats: ctx.tracker.snapshot() };
+      trace(type, finished);
+      return finished;
+    }
+    const stats = result.done.then((final) => {
       const snapshot = ctx.tracker.snapshot();
       if (typeof callOptions.onStats === "function") callOptions.onStats(snapshot);
+      trace(type, { ...result, ...final, stats: snapshot });
       return snapshot;
     });
     stats.catch(() => {});
@@ -79,7 +98,7 @@ function createRagforge(options = {}) {
     ragPipeline: (query, opts = {}) =>
       run(async (ctx) => {
         const result = await ragPipeline(ctx, query, { hybrid: config.hybrid, rerank: config.rerank, ...opts });
-        return withStats(ctx, result, opts);
+        return withStats(ctx, result, opts, "ragPipeline");
       }, opts),
 
     // Picks a technique for the query without running it; see src/router/route.js
@@ -101,7 +120,7 @@ function createRagforge(options = {}) {
           chosen.reason += " Reranking was skipped because no reranker is configured.";
         }
         const result = await ragPipeline(ctx, query, { ...opts, hybrid, rerank, techniques: pipelineTechniques(chosen.technique) });
-        return withStats(ctx, { ...result, route: chosen }, opts);
+        return withStats(ctx, { ...result, route: chosen }, opts, "auto");
       }, opts),
 
     // Benchmarks retrieval techniques; see src/eval/evaluate.js for options
