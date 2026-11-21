@@ -39,3 +39,10 @@ coverage/
 
 # Optional eslint cache
 .eslintcache
+# Demo video project (demo/): dependencies, render cache, intermediates
+demo/node_modules/
+demo/.remotion/
+demo/build/
+demo/out/
+demo/voiceover/raw/
+demo/public/

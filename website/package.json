@@ -1,0 +1,29 @@
+{
+  "name": "ragforge-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Product website for ragforge: React client, Express API that runs on ragforge itself",
+  "scripts": {
+    "dev": "node --watch-path=server server/dev.mjs",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test server/api.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ragforge": "^2.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "highlight.js": "^11.10.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "react-router-dom": "^6.28.0",
+    "remark-gfm": "^4.0.0",
+    "vite": "^6.0.0"
+  }
+}
