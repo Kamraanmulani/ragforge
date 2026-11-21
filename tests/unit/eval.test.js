@@ -144,6 +144,21 @@ describe('evaluate', () => {
     expect(result.recommendation.reason).toMatch(/\+100 points/);
   });
 
+  test('prefers baseline when it ties another technique on quality and cost', async () => {
+    const llm = createKeywordProvider(respond);
+    const result = await createRagforge({ llm }).evaluate({
+      documents: DOCS,
+      questions: [{ question: 'cats purr', expectedText: 'Cats are small domestic felines' }],
+      techniques: ['hybrid', 'baseline'],
+      topK: 1,
+    });
+
+    expect(result.results.find((r) => r.technique === 'baseline')).toMatchObject({ hitRate: 1, mrr: 1 });
+    expect(result.results.find((r) => r.technique === 'hybrid')).toMatchObject({ hitRate: 1, mrr: 1 });
+    expect(result.ranking[0]).toBe('baseline');
+    expect(result.recommendation.technique).toBe('baseline');
+  });
+
   test('small gains over baseline are not recommended', async () => {
     const llm = createKeywordProvider(respond);
     const result = await createRagforge({ llm }).evaluate({

@@ -161,7 +161,12 @@ function summarize(technique, runs) {
 
 function rankRows(rows) {
   const cost = (r) => (r.avgCostUSD === null ? Infinity : r.avgCostUSD);
-  return [...rows].sort((a, b) => b.hitRate - a.hitRate || b.mrr - a.mrr || cost(a) - cost(b) || a.avgLatencyMs - b.avgLatencyMs);
+  return [...rows].sort((a, b) =>
+    b.hitRate - a.hitRate ||
+    b.mrr - a.mrr ||
+    cost(a) - cost(b) ||
+    (a.technique === "baseline" ? -1 : b.technique === "baseline" ? 1 : 0)
+  );
 }
 
 /**
