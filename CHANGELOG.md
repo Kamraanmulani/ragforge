@@ -2,10 +2,14 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [2.3.0] - 2026-11-21
+
+Trust: measure answer quality, catch regressions in CI, and test on the queries real users ask.
 
 ### Added
 
+- **`npx ragforge chat --docs ./docs`.** Ask questions about a folder from the terminal. The answer streams in, followed by the passages it cites, the technique used, the cost and the latency. Works with every provider, including fully local with Ollama.
+- **`npx ragforge init [dir]`.** Scaffolds a working RAG app: an Express server with `POST /ask` (or a Next.js route with `--template next`), a sample document, golden questions, npm scripts for the eval and a GitHub workflow that fails pull requests when retrieval quality drops. In an existing project it keeps your files and only adds missing scripts and dependencies to `package.json`.
 - **Eval on real queries.** Three steps: log, label, evaluate.
   - `createRagforge({ onTrace })` is called with a trace of every `auto()` and `ragPipeline()` call: query, route, sources, citations, answer and stats. A file path (`onTrace: 'traces.jsonl'`) appends them as JSONL. `createTraceLogger(file, { includeText: false })` leaves passage text and answers out of the log. A hook that throws never fails the call.
   - `npx ragforge label --from-logs traces.jsonl --docs ./docs` shows each real query with candidate passages and asks which one answers it. It uses keyword search, so it needs no API key. Labels are saved after every answer and later runs continue where you stopped.
@@ -22,6 +26,10 @@ All notable changes to ragforge are documented here. This project follows [Seman
 - `--markdown <file>` writes the scoreboard as Markdown, with the comparison when `--compare` is set.
 - **GitHub Action.** `uses: Kamraanmulani/ragforge@v2.3.0` runs the eval, adds the scoreboard to the job summary, posts it as a pull request comment that is updated on each push, and fails the job on a regression.
 - `compareEvals()`, `formatComparison()` and `renderMarkdownReport()` are exported.
+
+### Fixed
+
+- `--techniques` and `--question-styles` accept spaces as well as commas. On Windows, an npm script's `--techniques baseline,hybrid` reached the CLI as `baseline hybrid` and was rejected as an unknown technique.
 
 ## [2.2.0] - 2026-11-13
 
@@ -116,6 +124,7 @@ Most code needs no changes: `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, 
 
 First stable release with HyDE, Chain-of-Thought, Step-Back, Fan-Out, RRF and the RAG pipeline.
 
+[2.3.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/Kamraanmulani/ragforge/compare/v1.1.0...v2.0.0

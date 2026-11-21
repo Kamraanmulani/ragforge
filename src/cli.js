@@ -1,4 +1,4 @@
-// `ragforge` command line: the `eval`, `label` and `mcp` commands
+// `ragforge` command line: the `eval`, `label`, `chat`, `init` and `mcp` commands
 const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("util");
@@ -13,15 +13,22 @@ const { chunkDocuments } = require("./eval/chunk");
 const { labelQueries, labelledQuestions, openingWords } = require("./eval/label");
 const { readTraces, uniqueQueries, sample, queryKey } = require("./core/trace");
 
+const { runChat, indexDocuments } = require("./chat");
+const { init, TEMPLATES } = require("./init");
+
 const DEFAULT_LABELS_FILE = "ragforge-labels.json";
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
        ragforge label --from-logs <file> --docs <file|dir> [options]
+       ragforge chat --docs <file|dir> [options]
+       ragforge init [dir] [--template express|next]
        ragforge mcp --docs <file|dir> [options]
 
 eval: benchmarks RAG query techniques on your documents and recommends one.
 label: shows real queries from a trace log and asks which passage answers each one.
        The labels are saved and used by eval --from-logs. Needs no API key.
+chat:  answers your questions about the documents in the terminal, with sources.
+init:  scaffolds a working RAG app with sample docs, golden questions and a CI eval.
 mcp:  serves your documents to coding agents (Claude Code, Cursor, Windsurf) over MCP.
       Tools: search_docs, get_chunk, ask. Works with no API key (keyword search).
 
@@ -73,6 +80,16 @@ Label options (label command):
   --top-k <n>               Passages shown per query (default 8)
   --labels <file>           Where labels are saved, added to on each run (default ${DEFAULT_LABELS_FILE})
 
+Chat options (chat command):
+  --docs, --provider, --embeddings, --model, --embedding-model, --top-k, --chunk-size
+                            As above. Type a question and press Enter; exit or Ctrl+D to leave.
+                            Each question is answered on its own, without earlier turns.
+
+Init options (init command):
+  --template <name>         express (default): server with POST /ask
+                            next: Next.js App Router route at /api/ask
+  --force                   Overwrite files that already exist
+
 MCP options (mcp command):
   --top-k <n>               Default passages per search_docs / ask call (default 5)
   --chunk-size <n>          Max characters per passage (default 800)
@@ -89,6 +106,10 @@ Examples:
   npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
   npx ragforge eval --docs ./docs --questions-file golden.json --compare main.json --fail-on-drop 3
   npx ragforge label --from-logs traces.jsonl --docs ./docs
+  npx ragforge chat --docs ./docs
+  npx ragforge chat --docs ./docs --provider ollama --model qwen2.5
+  npx ragforge init my-rag-app
+  npx ragforge init --template next
   npx ragforge eval --from-logs traces.jsonl --docs ./docs
 `;
 
@@ -113,6 +134,11 @@ function toInt(value, name) {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1) throw new Error(`--${name} must be a positive whole number`);
   return n;
+}
+
+// "a,b" or "a b": on Windows, cmd turns the commas of an npm script's arguments into spaces
+function toList(value) {
+  return value === undefined ? undefined : value.split(/[\s,]+/).filter(Boolean);
 }
 
 // --fail-on-drop: points of hit rate, 0 or more (decimals allowed)
@@ -194,6 +220,8 @@ async function main(argv, io = {}) {
         json: { type: "string" },
         "from-logs": { type: "string" },
         labels: { type: "string" },
+        template: { type: "string" },
+        force: { type: "boolean" },
         markdown: { type: "string" },
         compare: { type: "string" },
         "fail-on-drop": { type: "string" },
@@ -213,6 +241,8 @@ async function main(argv, io = {}) {
   }
   if (command === "mcp") return runMcp(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
 
+  if (command === "chat") return runChatCommand(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd, factory });
+  if (command === "init") return runInit(values, positionals[1], { stdout, stderr, cwd });
   if (command === "label") return runLabel(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
 
   if (command !== "eval") {
@@ -249,7 +279,7 @@ async function main(argv, io = {}) {
       reranker: values.reranker,
     });
 
-    const techniques = values.techniques ? values.techniques.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+    const techniques = toList(values.techniques);
 
     stderr.write(`Evaluating ${documents.length} document(s) with ${provider}...\n`);
     // Live counter in a terminal; one line per phase when piped (CI logs)
@@ -260,7 +290,7 @@ async function main(argv, io = {}) {
       questions,
       techniques,
       numQuestions: toInt(values.questions, "questions"),
-      questionStyles: values["question-styles"] ? values["question-styles"].split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+      questionStyles: toList(values["question-styles"]),
       topK: toInt(values["top-k"], "top-k"),
       rerankCandidates: toInt(values["rerank-candidates"], "rerank-candidates"),
       chunkSize: toInt(values["chunk-size"], "chunk-size"),
@@ -391,6 +421,83 @@ async function runLabel(values, { stdin, stdout, stderr, cwd }) {
     stdout.write(`\n\nLabelled ${answered}${none ? `, ${none} with no answer in the docs` : ""}${result.skipped ? `, skipped ${result.skipped}` : ""}. `);
     stdout.write(result.labels.length ? `Saved to ${labelsName}.\n` : "Nothing saved.\n");
     if (labels.some((l) => !l.noAnswer)) stdout.write(`Next: npx ragforge eval --from-logs ${values["from-logs"]} --docs ${values.docs.map((d) => (/\s/.test(d) ? `"${d}"` : d)).join(" --docs ")}\n`);
+    return 0;
+  } catch (err) {
+    stderr.write(`Error: ${err.message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * runChatCommand
+ * Indexes the documents in memory, then answers questions typed in the terminal.
+ */
+async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
+  try {
+    if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge chat --docs ./docs");
+    const provider = values.provider ?? "openai";
+    if (provider === "local") throw new Error("chat needs a chat model, and local has none. Use --provider openai (or ollama, ...) with --embeddings local.");
+    const documents = await loadDocuments(values.docs, { cwd });
+    if (!documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+
+    const rf = factory({
+      llm: makeProvider(provider, { chatModel: values.model }),
+      embeddings: makeProvider(embeddingsProviderName(values, provider), { embeddingModel: values["embedding-model"] }),
+    });
+
+    const live = Boolean(stderr.isTTY);
+    const count = await indexDocuments(rf, documents, {
+      chunkSize: toInt(values["chunk-size"], "chunk-size"),
+      concurrency: toInt(values.concurrency, "concurrency"),
+      onProgress: ({ done, total }) => {
+        if (live) stderr.write(`\rIndexing: ${done}/${total}`);
+      },
+    });
+    stderr.write(`${live ? "\r" : ""}Indexed ${count} passages from ${documents.length} document(s) with ${provider}. Ask a question, or type exit.\n\n`);
+
+    await runChat({ rf, topK: toInt(values["top-k"], "top-k"), input: stdin, output: stdout });
+    return 0;
+  } catch (err) {
+    stderr.write(`Error: ${err.message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * runInit
+ * Writes a template into the folder and prints what to do next.
+ */
+function runInit(values, target, { stdout, stderr, cwd }) {
+  try {
+    const template = values.template ?? "express";
+    const dir = path.resolve(cwd, target ?? ".");
+    const result = init({ dir, template, force: values.force });
+    const spec = TEMPLATES[template];
+    const say = (text = "") => stdout.write(`${text}\n`);
+
+    say(`ragforge init: ${spec.description}${target ? " in " + target : ""}`);
+    say();
+    for (const name of result.created) say(`  created  ${name}`);
+    for (const name of result.skipped) say(`  kept     ${name}`);
+    const { packageJson } = result;
+    if (packageJson.created) say("  created  package.json");
+    else if (packageJson.added.length) say(`  updated  package.json (added ${packageJson.added.join(", ")})`);
+    else say("  kept     package.json");
+    if (result.hasDocs) {
+      say("\ndocs/ already has files, so the sample document and its golden.json were not written.");
+      say('Write golden.json for your docs: [{ "question": "...", "expectedText": "words from the passage that answers it" }]');
+    } else if (result.skipped.length && !values.force) {
+      say("\nFiles that already existed were kept. Use --force to overwrite them.");
+    }
+
+    say("\nNext:");
+    if (target) say(`  cd ${/\s/.test(target) ? '"' + target + '"' : target}`);
+    for (const step of spec.next) say(`  ${step}`);
+    say(`  ${spec.tryIt}`);
+    say("\nCheck retrieval quality:");
+    say("  npm run eval:baseline   # scores the golden questions and saves ragforge-baseline.json");
+    say("  npm run eval            # fails when a score dropped; also runs on pull requests");
+    say("  npm run chat            # ask your docs questions in the terminal");
     return 0;
   } catch (err) {
     stderr.write(`Error: ${err.message}\n`);

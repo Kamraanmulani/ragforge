@@ -342,6 +342,56 @@ Outputs: `passed` (`true` or `false`), `markdown` and `json` (paths of the repor
 
 From code, `compareEvals(baseline, result, { failOnDrop: 3 })` returns `{ rows, regressions, passed, warnings }`, and `formatComparison()` and `renderMarkdownReport()` print it.
 
+## Chat with your docs in the terminal
+
+```bash
+npx ragforge chat --docs ./docs
+```
+
+It indexes the folder in memory, then answers what you type. The answer streams in, followed by the passages it cites and what the call cost:
+
+```
+> How long do refunds take?
+
+Refunds are issued to the original payment method within 5 business days [1].
+
+Sources:
+  [1] docs/billing.md#4  Refunds are issued to the original payment method within 5 business days…
+(hyde · 3 LLM calls · $0.0006 · 2.4s)
+```
+
+Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k` and `--chunk-size` options as `eval`, so `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
+
+## Start a new RAG app
+
+```bash
+npx ragforge init my-rag-app
+```
+
+This writes a small working app, with the quality checks already set up:
+
+| File | |
+|---|---|
+| `server.js`, `rag.js` | Express server with `POST /ask`. Indexes `./docs` in memory, answers with `auto()` and returns the cited sources |
+| `docs/acme-notes.md` | A sample document to replace with your own |
+| `golden.json` | Golden questions for the sample document |
+| `.github/workflows/rag-eval.yml` | Fails pull requests when retrieval quality drops |
+| `package.json` | `npm start`, `npm run chat`, `npm run eval:baseline` and `npm run eval` |
+| `.env.example` | Where your API key goes |
+
+```bash
+cd my-rag-app
+cp .env.example .env   # then add your OPENAI_API_KEY
+npm install
+npm start
+curl -X POST localhost:3000/ask -H "content-type: application/json" -d '{"question":"How long do refunds take?"}'
+```
+
+`npm run eval:baseline` scores the golden questions and saves `ragforge-baseline.json`; `npm run eval` compares against it and fails on a drop, and the workflow runs it on every pull request. The app also logs real queries to `traces.jsonl`, ready for [`ragforge label`](#evaluate-on-real-user-queries).
+
+- `--template next` writes a Next.js App Router route at `app/api/ask/route.js` (or `src/app/...`) instead of the Express server.
+- Run it inside an existing project and it keeps the files you have: nothing is overwritten without `--force`, and your `package.json` only gains the scripts and dependencies it lacks. If `docs/` already has files, the sample document and its `golden.json` are left out.
+
 ## MCP server for coding agents
 
 Give Claude Code, Cursor or Windsurf search over your docs with one command. It needs no API key.
