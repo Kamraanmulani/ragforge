@@ -2,6 +2,27 @@
 
 const { createRagforge, createMemoryVectorStore, chunkText, formatTable, renderHtmlReport } = require('../../index');
 const { createKeywordProvider, keywordVector } = require('./helpers');
+const { recommend, rankRows } = require('../../src/eval/evaluate');
+
+describe('recommend', () => {
+  const row = (technique, hitRate, mrr, avgLatencyMs, avgLlmCalls = 0) => ({ technique, hitRate, mrr, avgLatencyMs, avgCostUSD: 0.000001, avgLlmCalls });
+
+  test('a tie with plain search recommends plain search, whichever was faster', () => {
+    // Same scores and cost: only latency differs, and it is noise
+    for (const [baselineMs, hybridMs] of [[2, 1], [1, 2]]) {
+      const ranked = rankRows([row('baseline', 1, 1, baselineMs), row('hybrid', 1, 1, hybridMs)]);
+      const pick = recommend(ranked, 5, 0.05);
+      expect(pick.technique).toBe('baseline');
+      if (ranked[0].technique === 'hybrid') expect(pick.reason).toMatch(/hybrid tied with plain search \(hit@5 100%, MRR 1\)/);
+    }
+  });
+
+  test('a free technique that ranks the right chunk higher is still recommended', () => {
+    const pick = recommend(rankRows([row('baseline', 0.8, 0.6, 1), row('hybrid', 0.8, 0.7, 2)]), 5, 0.05);
+    expect(pick.technique).toBe('hybrid');
+    expect(pick.reason).toMatch(/ranked the right chunk higher \(MRR 0\.7 vs 0\.6\)/);
+  });
+});
 
 const DOCS = [
   { id: 'cats.md', content: 'Cats are small domestic felines. Cats purr when content and groom their fur with rough tongues for many hours every day.' },

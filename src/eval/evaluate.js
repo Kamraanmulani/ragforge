@@ -185,6 +185,14 @@ function recommend(ranked, topK, minImprovement) {
   }
 
   const gain = best.hitRate - baseline.hitRate;
+  // A tie on both scores was decided by cost or latency, which is noise at this size:
+  // the pick would flip from run to run. Plain search is the simpler choice.
+  if (gain === 0 && best.mrr === baseline.mrr) {
+    return {
+      technique: "baseline",
+      reason: `${best.technique} tied with plain search (hit@${topK} ${pct(best.hitRate)}, MRR ${best.mrr}), so there's no reason to switch.`,
+    };
+  }
   if (!addsCost(best, baseline)) {
     return {
       technique: best.technique,
@@ -431,4 +439,4 @@ async function evaluate(config, options = {}) {
   };
 }
 
-module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions };
+module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions, recommend, rankRows };

@@ -2,6 +2,12 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [2.3.1] - 2026-11-21
+
+### Fixed
+
+- The eval no longer recommends a technique that only tied with plain search. When a free technique such as `hybrid` matched plain search on both hit@k and MRR, the pick was decided by a sub-millisecond latency difference and could change from run to run, with a reason claiming it "ranked the right chunk higher". A tie now recommends plain search.
+
 ## [2.3.0] - 2026-11-21
 
 Trust: measure answer quality, catch regressions in CI, and test on the queries real users ask.
@@ -124,6 +130,7 @@ Most code needs no changes: `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, 
 
 First stable release with HyDE, Chain-of-Thought, Step-Back, Fan-Out, RRF and the RAG pipeline.
 
+[2.3.1]: https://github.com/Kamraanmulani/ragforge/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.0.1...v2.1.0
