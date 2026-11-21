@@ -115,7 +115,9 @@ npx ragforge eval --docs ./docs
 |---|---|---|
 | `--docs <path\|url>` | | File, folder or http(s) URL, repeatable. See [Documents](#documents) |
 | `--questions <n>` | `10` | Questions to generate |
-| `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]` |
+| `--questions-file <file>` | | Your own: `[{ "question": "...", "expectedText": "..." }]`, or an earlier `--json` result |
+| `--from-logs <file>` | | Real queries from a JSONL trace log, labelled with `ragforge label`. See [real user queries](#evaluate-on-real-user-queries) |
+| `--labels <file>` | `ragforge-labels.json` | Labels file for `--from-logs` |
 | `--question-styles <list>` | `question,keywords,conceptual` | Which generated query styles to mix |
 | `--techniques <list>` | `baseline,hybrid,hyde,stepback,fanout` | Also `cot`; combine with `+`, e.g. `hybrid+hyde` |
 | `--provider <name>` | `openai` | `openai` or `ollama` |
@@ -124,11 +126,16 @@ npx ragforge eval --docs ./docs
 | `--embedding-model <name>` | provider default | Embedding model |
 | `--reranker <name>` | | `llm`, `cohere` or `jina`; adds `rerank` and `hybrid+rerank` to the techniques |
 | `--rerank-candidates <n>` | `20` | Candidates retrieved before reranking |
+| `--answers` | | Also grade answer quality with an LLM judge. See [Answer quality](#answer-quality) |
+| `--judge-model <name>` | same as `--model` | Chat model that grades the answers |
 | `--top-k <n>` | `5` | Results per search |
 | `--chunk-size <n>` | `800` | Max characters per chunk |
 | `--concurrency <n>` | `4` | Parallel requests |
 | `--html <file>` | | Shareable report, works in light and dark mode |
 | `--json <file>` | | Full results, usable with `auto({ from })` |
+| `--markdown <file>` | | Scoreboard as Markdown, for pull request comments |
+| `--compare <file>` | | Earlier `--json` result to compare against. See [CI](#catch-retrieval-regressions-in-ci) |
+| `--fail-on-drop <points>` | | With `--compare`: exit 1 when hit@k fell by more than this many points |
 
 With OpenAI, a 10-question run on the default techniques makes about 40 small `gpt-4o-mini` calls plus embeddings. The scoreboard shows the exact cost.
 
@@ -158,6 +165,43 @@ await rf.evaluate({
 
 </details>
 
+### Answer quality
+
+Finding the right chunk doesn't guarantee a correct answer. Add `--answers` to grade the answers too:
+
+```bash
+npx ragforge eval --docs ./docs --answers
+```
+
+For every technique, ragforge writes an answer from the passages that technique retrieved, with the same prompt `ragPipeline` and `auto` use, and an LLM judge grades it. The scores sit next to the retrieval scores. This is a run on this README, with 10 questions and `--techniques baseline,hybrid,hyde`:
+
+```
+technique   hit@5   MRR     faithful   relevance   ctx recall   citations   latency   cost/query   LLM calls   errors
+---------   -----   -----   --------   ---------   ----------   ---------   -------   ----------   ---------   ------
+hybrid ★    100%    0.883   75% ±10    100%        100%         71% ±20     293ms     $0.000001    0
+baseline    90%     0.708   61% ±19    100%        94% ±12      72% ±17     316ms     $0.000001    0
+hyde        70%     0.583   68% ±14    100%        76% ±25      70% ±12     6.8s      $0.000326    1
+
+Answers: 30 written and graded by gpt-4o-mini (judge v1), cost $0.0372. ± is the 95% interval across questions.
+```
+
+| Column | What it measures |
+|---|---|
+| `faithful` | Share of the answer's claims that the retrieved passages support. Low means the model made things up |
+| `relevance` | Whether the answer addresses the question: fully, partly or not at all |
+| `ctx recall` | Share of the facts needed for the answer that were retrieved. Unlike hit@k, it gives credit when another passage holds the answer |
+| `citations` | Share of the answer's `[1]`-style citations that point at a passage supporting the statement. An answer with claims and no citations scores 0 |
+
+- **Cost.** About 4 extra LLM calls per question and technique: one answer, and a judge call for each metric that needs one. Techniques that retrieved the same passages share one answer and one set of grades. Latency and cost per query in the table stay retrieval-only, and the answer cost is reported on its own line.
+- **A judge that has to show its evidence.** For every claim, fact or citation it accepts, the judge must quote the passage, and ragforge checks that the quote is really there. A "yes" without a valid quote counts as a "no". Asked for a plain yes or no, judge models approve almost everything.
+- **See what went wrong.** In the `--json` result, each question's run has `findings`: the `unsupportedClaims`, `missingFacts` and `wrongCitations` behind a low score.
+- **Judge noise.** The judge runs at temperature 0 with fixed, versioned prompts, and `±` shows how far each mean could be off with this many questions. With 10 questions the intervals are wide, so use `--questions 30` or more before trusting small differences.
+- **A stronger judge.** `--judge-model gpt-4o` grades with a different model than the one that writes the answers.
+- **In CI.** With `--answers` on both runs, `--fail-on-drop` also fails on a faithfulness drop. Scores are only compared between runs graded by the same judge model and judge version.
+- **Reference answers.** For your own questions, add `expectedAnswer` and context recall is judged against it when the expected chunk was missed.
+
+From code: `rf.evaluate({ documents, answers: true, judgeOptions: { model: 'gpt-4o' } })`. Each row gets an `answers` object with the four scores and their intervals, and each question's runs keep the `answer` and its `scores`.
+
 ### Documents
 
 | Format | How it's read | Needs |
@@ -178,6 +222,175 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 ```
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
+
+## Evaluate on real user queries
+
+Generated questions are tidier than what users actually type. To test on real traffic, log it, label a sample, and run the eval on that.
+
+**1. Log.** `onTrace` records every `auto()` and `ragPipeline()` call. A file path appends one JSON line per call:
+
+```js
+const rf = createRagforge({ vectorStore, onTrace: 'traces.jsonl' });
+// {"timestamp":"...","type":"auto","query":"how do refunds work","route":{...},
+//  "sources":[{"ref":1,"id":"faq#3","score":0.83,"cited":true,"content":"..."}],
+//  "citations":[1],"answer":"...","stats":{"llmCalls":2,"costUSD":0.0004,"latencyMs":1310,...}}
+```
+
+Pass a function instead to send traces anywhere: `onTrace: (trace) => queue.push(trace)`. To keep passage text and answers out of the log, use `onTrace: createTraceLogger('traces.jsonl', { includeText: false })`. A hook that throws is logged and never fails the call. Streamed answers are traced when the stream ends.
+
+**2. Label.** Go through the queries in the terminal and mark the passage that answers each one. It uses keyword search over your docs, so it needs no API key:
+
+```bash
+npx ragforge label --from-logs traces.jsonl --docs ./docs
+```
+
+```
+[1/10] how do refunds work  (asked 14 times)
+  1. docs/billing.md#4
+     Refunds are issued to the original payment method within 5 business days…
+  2. docs/faq.md#2
+     You can cancel at any time from the account page…
+Which passage answers it? number, n = none, s = skip, q = save and quit, or words to search for:
+```
+
+Type a number to pick a passage, `n` when the docs don't answer the query, `s` to skip, or other words to search again. The most-asked queries come first. Labels are saved to `ragforge-labels.json` after every answer, and the next run continues with the queries that are left (`--questions <n>` sets how many per session, default 10).
+
+**3. Evaluate.**
+
+```bash
+npx ragforge eval --from-logs traces.jsonl --docs ./docs
+```
+
+This runs the usual scoreboard on your labelled real queries instead of generated ones. It works with `--answers`, `--compare` and `--fail-on-drop`. Queries marked `n` are left out and counted: they are gaps in your docs, not retrieval failures.
+
+Any JSONL file with a `query` (or `question`) on each line works as a log, so you can export queries from your own analytics. Labels are matched to passages by their opening words, so they survive re-chunking; re-label a query when its passage is rewritten.
+
+## Catch retrieval regressions in CI
+
+Retrieval quality drops quietly when docs, chunking or models change. Save a baseline once, then compare every later run against it:
+
+```bash
+# Once, on your main branch: generate questions and save the result
+npx ragforge eval --docs ./docs --techniques baseline,hybrid --questions 30 --json ragforge-baseline.json
+```
+
+```bash
+# In CI: ask the same questions again and fail if a score dropped
+npx ragforge eval --docs ./docs --techniques baseline,hybrid --questions-file ragforge-baseline.json --compare ragforge-baseline.json --fail-on-drop 3
+```
+
+```
+Compared with ragforge-baseline.json
+
+technique   hit@5       Δ pts   MRR             Δ        latency       cost/query
+---------   ---------   -----   -------------   ------   -----------   ---------------------   -----------
+hybrid      90% → 90%   0       0.812 → 0.812   0.000    41ms → 39ms   $0.000002 → $0.000002
+baseline    87% → 73%   -13.4   0.741 → 0.652   -0.089   38ms → 40ms   $0.000002 → $0.000002   ✗ regressed
+
+✗ Regression: baseline lost 13.4 points of hit@5 (allowed: 3).
+```
+
+- `--compare <file>` prints what changed against an earlier `--json` result. On its own it never fails the build.
+- `--fail-on-drop <points>` exits with code 1 when any technique in both runs lost **more than** that many points of hit@k (or of faithfulness, when both runs used `--answers`). `0` fails on any drop. Limit what is checked with `--techniques`.
+- `--questions-file` takes the baseline itself, so there is nothing to write by hand. Each generated question is matched on the opening words of the passage it came from, so a passage that moved to another chunk still counts and one that was removed or rewritten is a miss. For questions that should survive rewrites, write your own: `[{ "question": "...", "expectedText": "..." }]`.
+- `--markdown <file>` writes the scoreboard (with the comparison) as Markdown.
+- ragforge warns when the two runs can't be compared fairly: different questions, a different top-k or a different embedding model.
+
+`baseline` and `hybrid` make no LLM calls, so their scores are the same on every run. Techniques that call an LLM (`hyde`, `stepback`, `fanout`) vary a little between runs, so give them a larger `--fail-on-drop`. When a drop is expected (you rewrote the docs), re-run the first command and commit the new baseline.
+
+### GitHub Action
+
+The action runs the eval, adds the scoreboard to the job summary, and posts it as a pull request comment that is updated on every push.
+
+```yaml
+# .github/workflows/rag-eval.yml
+name: rag eval
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write # for the comment
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kamraanmulani/ragforge@v2.3.0
+        with:
+          docs: ./docs
+          techniques: baseline,hybrid
+          questions-file: ragforge-baseline.json
+          compare: ragforge-baseline.json
+          fail-on-drop: 3
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+To run it with no API key, embed locally. Create the baseline with `--embeddings local` (after `npm install @huggingface/transformers`), then use `provider: local` and `packages: "@huggingface/transformers"` in the workflow and drop the `env` block.
+
+| Input | |
+|---|---|
+| `docs` | File, folder or URL. One per line for several. Required |
+| `questions-file`, `compare`, `fail-on-drop`, `provider`, `embeddings`, `techniques` | Same as the CLI flags |
+| `args` | Any other `ragforge eval` flags, e.g. `--top-k 3 --chunk-size 500` |
+| `packages` | Extra npm packages to install next to ragforge, e.g. `unpdf` for PDFs |
+| `version` | ragforge version to run (default `latest`) |
+| `comment` | `false` to skip the pull request comment (default `true`) |
+
+Outputs: `passed` (`true` or `false`), `markdown` and `json` (paths of the reports). Pull requests from forks get a read-only token, so the comment is skipped there and the check still runs.
+
+From code, `compareEvals(baseline, result, { failOnDrop: 3 })` returns `{ rows, regressions, passed, warnings }`, and `formatComparison()` and `renderMarkdownReport()` print it.
+
+## Chat with your docs in the terminal
+
+```bash
+npx ragforge chat --docs ./docs
+```
+
+It indexes the folder in memory, then answers what you type. The answer streams in, followed by the passages it cites and what the call cost:
+
+```
+> How long do refunds take?
+
+Refunds are issued to the original payment method within 5 business days [1].
+
+Sources:
+  [1] docs/billing.md#4  Refunds are issued to the original payment method within 5 business days…
+(hyde · 3 LLM calls · $0.0006 · 2.4s)
+```
+
+Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k` and `--chunk-size` options as `eval`, so `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
+
+## Start a new RAG app
+
+```bash
+npx ragforge init my-rag-app
+```
+
+This writes a small working app, with the quality checks already set up:
+
+| File | |
+|---|---|
+| `server.js`, `rag.js` | Express server with `POST /ask`. Indexes `./docs` in memory, answers with `auto()` and returns the cited sources |
+| `docs/acme-notes.md` | A sample document to replace with your own |
+| `golden.json` | Golden questions for the sample document |
+| `.github/workflows/rag-eval.yml` | Fails pull requests when retrieval quality drops |
+| `package.json` | `npm start`, `npm run chat`, `npm run eval:baseline` and `npm run eval` |
+| `.env.example` | Where your API key goes |
+
+```bash
+cd my-rag-app
+cp .env.example .env   # then add your OPENAI_API_KEY
+npm install
+npm start
+curl -X POST localhost:3000/ask -H "content-type: application/json" -d '{"question":"How long do refunds take?"}'
+```
+
+`npm run eval:baseline` scores the golden questions and saves `ragforge-baseline.json`; `npm run eval` compares against it and fails on a drop, and the workflow runs it on every pull request. The app also logs real queries to `traces.jsonl`, ready for [`ragforge label`](#evaluate-on-real-user-queries).
+
+- `--template next` writes a Next.js App Router route at `app/api/ask/route.js` (or `src/app/...`) instead of the Express server.
+- Run it inside an existing project and it keeps the files you have: nothing is overwritten without `--force`, and your `package.json` only gains the scripts and dependencies it lacks. If `docs/` already has files, the sample document and its `golden.json` are left out.
 
 ## MCP server for coding agents
 
@@ -375,7 +588,6 @@ Local embeddings run a small model in-process with `@huggingface/transformers`, 
 On the CLI: `npx ragforge eval --docs ./docs --provider gemini`, or `--provider anthropic --embeddings openai`. The API keys are read from the environment or a `.env` file, and only when a call needs them.
 
 Prices for the built-in models are in `DEFAULT_PRICING`. Models without a verified price, such as the Gemini and Mistral embedding models, report `costUSD: null` (unknown) instead of a guess. Add your own with `createRagforge({ pricing })`.
-```
 
 <details>
 <summary><b>Custom models, endpoints and providers</b></summary>
@@ -528,6 +740,7 @@ Without a vector store, techniques still work: HyDE returns its hypothetical doc
 const rf = createRagforge({
   cache: true,   // in-memory LRU (1000 entries), or any { get, set } such as Redis
   debug: true,   // log progress; silent by default. Or pass logger: { info, error }
+  onTrace: 'traces.jsonl', // log every auto() and ragPipeline() call, see "Evaluate on real user queries"
 });
 
 const { stats } = await rf.ragPipeline('What is overfitting?');
@@ -579,14 +792,14 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 
 **Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `citations` (true), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

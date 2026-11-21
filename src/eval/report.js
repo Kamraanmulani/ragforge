@@ -10,19 +10,46 @@ function usd(x) {
   return x < 0.01 ? `$${x.toFixed(6)}` : `$${x.toFixed(4)}`;
 }
 
+// Answer-quality columns, shown next to the retrieval scores when the eval ran with `answers`
+const ANSWER_COLUMNS = [
+  ["faithfulness", "faithful"],
+  ["answerRelevance", "relevance"],
+  ["contextRecall", "ctx recall"],
+  ["citationAccuracy", "citations"],
+];
+
+// "91% ±8": the mean, and the half-width of its 95% interval in points
+function answerScore(answers, metric) {
+  const value = answers?.[metric];
+  if (value === null || value === undefined) return "n/a";
+  const ci = answers.ci?.[metric];
+  return ci ? `${pct(value)} ±${Math.round(ci * 100)}` : pct(value);
+}
+
+const answerHeaders = (result) => (result.answers ? ANSWER_COLUMNS.map(([, label]) => label) : []);
+const answerCells = (result, row) => (result.answers ? ANSWER_COLUMNS.map(([metric]) => answerScore(row.answers, metric)) : []);
+
+// One line on where the answer scores come from, or null when there are none
+function answerNote(result) {
+  const a = result.answers;
+  if (!a) return null;
+  return `Answers: ${a.generated} written and graded by ${a.judgeModel} (judge v${a.judgeVersion}), cost ${usd(a.usage.costUSD)}. ± is the 95% interval across questions.`;
+}
+
 /**
  * formatTable
  * Plain-text scoreboard for terminals
  */
 function formatTable(result) {
   const { topK, provider } = result;
-  const header = ["technique", `hit@${topK}`, "MRR", "latency", "cost/query", "LLM calls", "errors"];
+  const header = ["technique", `hit@${topK}`, "MRR", ...answerHeaders(result), "latency", "cost/query", "LLM calls", "errors"];
   const rows = result.ranking.map((name) => {
     const r = result.results.find((x) => x.technique === name);
     return [
       name === result.recommendation.technique ? `${name} ★` : name,
       pct(r.hitRate),
       r.mrr.toFixed(3),
+      ...answerCells(result, r),
       ms(r.avgLatencyMs),
       usd(r.avgCostUSD),
       String(r.avgLlmCalls),
@@ -48,6 +75,7 @@ function formatTable(result) {
     `★ Recommended: ${result.recommendation.technique}`,
     `  ${result.recommendation.reason}`,
     `Setup: ${setupParts.join(", ")}`,
+    ...(result.answers ? [answerNote(result)] : []),
   ].join("\n");
 }
 
@@ -73,7 +101,7 @@ function renderHtmlReport(result, { title = "ragforge eval report" } = {}) {
       return `<tr${rec ? ' class="rec"' : ""}>
   <th scope="row">${esc(r.technique)}${rec ? ' <span class="badge">recommended</span>' : ""}</th>
   <td><div class="bar"><span style="width:${(r.hitRate * 100).toFixed(1)}%"></span></div><b>${pct(r.hitRate)}</b></td>
-  <td>${r.mrr.toFixed(3)}</td>
+  <td>${r.mrr.toFixed(3)}</td>${answerCells(result, r).map((cell) => `\n  <td>${esc(cell)}</td>`).join("")}
   <td>${ms(r.avgLatencyMs)}</td>
   <td>${usd(r.avgCostUSD)}</td>
   <td>${r.avgLlmCalls}</td>
@@ -89,9 +117,12 @@ function renderHtmlReport(result, { title = "ragforge eval report" } = {}) {
           const run = q.runs[t];
           if (!run) return "";
           if (run.error) return `<li class="err" title="${esc(run.error)}">${esc(t)}: error</li>`;
+          // Hover a technique to read the answer it was graded on
+          const title = run.answer ? ` title="${esc(run.answer)}"` : "";
+          const faithful = typeof run.scores?.faithfulness === "number" ? ` · faithful ${pct(run.scores.faithfulness)}` : "";
           return run.rank
-            ? `<li class="hit">${esc(t)}: #${run.rank}</li>`
-            : `<li class="miss">${esc(t)}: miss</li>`;
+            ? `<li class="hit"${title}>${esc(t)}: #${run.rank}${faithful}</li>`
+            : `<li class="miss"${title}>${esc(t)}: miss${faithful}</li>`;
         })
         .join("");
       const expected = q.expectedId != null ? `expected chunk <code>${esc(q.expectedId)}</code>` : `expected text “${esc(q.expectedText)}”`;
@@ -169,13 +200,18 @@ code { font-size: .85em; }
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>Technique</th><th>Hit@${topK}</th><th>MRR</th><th>Latency</th><th>Cost / query</th><th>LLM calls</th><th>Errors</th></tr></thead>
+<thead><tr><th>Technique</th><th>Hit@${topK}</th><th>MRR</th>${answerHeaders(result).map((h) => `<th>${esc(h)}</th>`).join("")}<th>Latency</th><th>Cost / query</th><th>LLM calls</th><th>Errors</th></tr></thead>
 <tbody>
 ${tableRows}
 </tbody>
 </table>
 </div>
-<p class="muted">Hit@${topK}: share of questions whose source chunk was retrieved. MRR: mean of 1/rank of that chunk (higher is better). Cost and latency are averages per question.</p>
+<p class="muted">Hit@${topK}: share of questions whose source chunk was retrieved. MRR: mean of 1/rank of that chunk (higher is better). Cost and latency are averages per question, for retrieval only.</p>
+${
+  result.answers
+    ? `<p class="muted">Answer quality is graded by an LLM judge on an answer written from each technique's passages. Faithful: share of the answer's claims the passages support. Relevance: whether the answer addresses the question. Ctx recall: share of the facts needed for the answer that were retrieved. Citations: share of [n] citations that point at a passage supporting the statement. ${esc(answerNote(result))}</p>`
+    : ""
+}
 
 <h2>Questions</h2>
 ${questionRows}
@@ -187,4 +223,4 @@ ${questionRows}
 `;
 }
 
-module.exports = { formatTable, renderHtmlReport };
+module.exports = { formatTable, renderHtmlReport, answerHeaders, answerCells, answerNote };

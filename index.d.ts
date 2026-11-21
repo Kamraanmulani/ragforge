@@ -126,6 +126,26 @@ export interface RagforgeOptions {
   defaults?: LLMOptions;
   debug?: boolean;
   logger?: { info?: (msg: string) => void; error?: (msg: string) => void };
+  /**
+   * Called with a trace of every auto() and ragPipeline() call. A file path appends
+   * the traces to that file as JSONL, for `ragforge label` and `eval --from-logs`.
+   * A hook that throws is logged and never fails the call.
+   */
+  onTrace?: ((trace: Trace) => void) | string;
+}
+
+/** One auto() or ragPipeline() call: what was asked, how it was routed, what the answer was written from */
+export interface Trace {
+  /** ISO 8601 */
+  timestamp: string;
+  type: "auto" | "ragPipeline";
+  query: string;
+  /** null for ragPipeline() */
+  route: { technique: string; category: string; decidedBy: string; reason: string } | null;
+  sources: Array<{ ref: number; id: string | number | null; score: number | null; cited: boolean; content?: string }>;
+  citations: number[];
+  answer?: string | null;
+  stats: Stats | null;
 }
 
 export interface CotResult {
@@ -199,6 +219,8 @@ export interface EvalQuestion {
   expectedId?: string | number;
   /** Text the answering chunk contains (case-insensitive) */
   expectedText?: string;
+  /** Reference answer. With `answers`, context recall is judged against it when the expected chunk was missed */
+  expectedAnswer?: string;
 }
 
 export interface EvaluateOptions {
@@ -219,7 +241,35 @@ export interface EvaluateOptions {
   /** Hit-rate gain over baseline needed to recommend a technique (default 0.05) */
   minImprovement?: number;
   llmOptions?: LLMOptions;
-  onProgress?: (progress: { phase: "index" | "questions" | "run"; done: number; total: number }) => void;
+  /**
+   * Also write an answer from each technique's passages and grade it with an LLM judge:
+   * faithfulness, answer relevance, context recall and citation accuracy
+   */
+  answers?: boolean;
+  /** LLM options for the judge, e.g. { model: "gpt-4o" } (default: llmOptions, at temperature 0) */
+  judgeOptions?: LLMOptions;
+  onProgress?: (progress: { phase: "index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
+}
+
+/** Answer-quality scores from 0 to 1. null when a metric could not be scored */
+export interface AnswerScores {
+  /** Share of the answer's claims that the retrieved passages support */
+  faithfulness: number | null;
+  /** Whether the answer addresses the question: 0, 0.5 or 1 per answer */
+  answerRelevance: number | null;
+  /** Share of the facts needed for the answer that were retrieved */
+  contextRecall: number | null;
+  /** Share of the answer's [n] citations whose passage supports the cited statement */
+  citationAccuracy: number | null;
+}
+
+export interface EvalAnswerSummary extends AnswerScores {
+  /** Half-width of each mean's 95% confidence interval across questions. null with fewer than 2 scores */
+  ci: AnswerScores;
+  /** Questions that got an answer */
+  judged: number;
+  /** Questions where the answer or one of the judge calls failed */
+  errors: number;
 }
 
 export interface EvalRow {
@@ -231,6 +281,8 @@ export interface EvalRow {
   totalCostUSD: number | null;
   avgLlmCalls: number;
   errors: number;
+  /** Answer quality, when the eval ran with `answers`. Cost and latency above cover retrieval only */
+  answers?: EvalAnswerSummary;
 }
 
 export interface EvalRun {
@@ -239,6 +291,13 @@ export interface EvalRun {
   queries: string[];
   retrieved: string[];
   error?: string;
+  /** With `answers`: the answer written from the retrieved passages, null when it failed */
+  answer?: string | null;
+  scores?: AnswerScores;
+  /** What lowered a score. The judge has to quote the passages for everything it accepts; these had no valid quote */
+  findings?: { unsupportedClaims?: string[]; missingFacts?: string[]; wrongCitations?: string[] };
+  /** Why the answer or a metric could not be scored, by metric name */
+  judgeErrors?: Record<string, string>;
 }
 
 export interface EvalResult {
@@ -253,6 +312,16 @@ export interface EvalResult {
   ranking: string[];
   best: string;
   recommendation: { technique: string; reason: string };
+  /** Present when the eval ran with `answers` */
+  answers?: {
+    /** Version of the fixed judge prompts. Scores are comparable only between runs with the same version */
+    judgeVersion: number;
+    judgeModel: string;
+    /** Answers written and graded. Techniques that retrieved the same passages share one */
+    generated: number;
+    /** Usage for writing and grading the answers, apart from the techniques' own */
+    usage: Stats;
+  };
   questions: Array<EvalQuestion & { source?: string; style?: "question" | "keywords" | "conceptual"; runs: Record<string, EvalRun> }>;
 }
 
@@ -431,6 +500,72 @@ export function formatTable(result: EvalResult): string;
 
 /** Standalone HTML report for an evaluate() result */
 export function renderHtmlReport(result: EvalResult, options?: { title?: string }): string;
+
+/** A score in the baseline and in the current run. `delta` is after minus before, null when either is missing */
+export interface EvalChange {
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+}
+
+export interface EvalComparisonRow {
+  technique: string;
+  /** regressed: hit rate or faithfulness fell by more than failOnDrop points. new / removed: in only one of the runs */
+  status: "regressed" | "down" | "up" | "same" | "new" | "removed";
+  /** The scores that fell by more than failOnDrop points */
+  regressedOn: Array<"hitRate" | "faithfulness">;
+  hitRate: EvalChange;
+  mrr: EvalChange;
+  /** All null unless both runs have answer scores */
+  faithfulness: EvalChange;
+  avgLatencyMs: EvalChange;
+  avgCostUSD: EvalChange;
+}
+
+export interface EvalComparison {
+  topK: number;
+  failOnDrop: number | null;
+  /** Whether faithfulness was compared (both runs have answer scores) */
+  answers: boolean;
+  rows: EvalComparisonRow[];
+  /** Techniques whose hit rate or faithfulness fell by more than failOnDrop points */
+  regressions: string[];
+  /** false when there is at least one regression */
+  passed: boolean;
+  /** Reasons the two runs may not be comparable (different questions, top-k or embedding model) */
+  warnings: string[];
+}
+
+/** The parts of an eval result a comparison reads, so a result loaded from `--json` works too */
+export type EvalSnapshot = Pick<EvalResult, "topK" | "questionCount" | "results"> & Partial<EvalResult>;
+
+/**
+ * Compare two evaluate() results technique by technique.
+ * With `failOnDrop`, a technique that lost more than that many points of hit rate is a regression.
+ * When both runs have answer scores, the same limit applies to faithfulness.
+ */
+export function compareEvals(baseline: EvalSnapshot, current: EvalSnapshot, options?: { failOnDrop?: number }): EvalComparison;
+
+/** Plain-text diff of two eval results, from compareEvals() */
+export function formatComparison(comparison: EvalComparison, options?: { baselineName?: string }): string;
+
+/** Markdown scoreboard for pull request comments. Pass `comparison` to show each score next to the baseline's */
+export function renderMarkdownReport(
+  result: EvalResult,
+  options?: { comparison?: EvalComparison | null; baselineName?: string; title?: string }
+): string;
+
+/**
+ * An onTrace hook that appends each trace to a JSONL file.
+ * `includeText: false` leaves out passage text and answers, keeping queries, routes, source ids and stats.
+ */
+export function createTraceLogger(file: string, options?: { includeText?: boolean }): (trace: Trace) => void;
+
+/** Reads a JSONL trace file. Lines that aren't JSON or have no query are skipped and counted */
+export function readTraces(file: string): { traces: Trace[]; skipped: number };
+
+/** Version of the fixed judge prompts used by evaluate({ answers: true }) */
+export const JUDGE_VERSION: number;
 
 /** Rule-based query category, no LLM call */
 export function classifyQuery(query: string): { category: QueryCategory; reason: string };

@@ -141,10 +141,35 @@ async function ragPipeline(ctx, query, options = {}) {
   const cite = opts.citations && sources.length > 0;
 
   // Build final synthesis prompt: include top retrieved passages / summaries as context
-  const contextText = sources.length
-    ? sources.map((s) => `[${s.ref}] ${s.content}`).join("\n\n")
-    : top.join("\n\n---\n\n");
-  const synthesisPrompt = [
+  const synthesisPrompt = answerPrompt(query, sources.map((s) => s.content), {
+    citations: opts.citations,
+    context: sources.length ? undefined : top.join("\n\n---\n\n"),
+  });
+
+  const base = { query, translation, retrieved: mergedIdsOrDocs, sources, cite };
+
+  // Sources are known now, so streaming callers can show them before the first token
+  if (options.stream) return streamAnswer(ctx, synthesisPrompt, base, opts.finalModelOptions);
+
+  ctx.log("[ragPipeline] Synthesizing final answer via LLM...");
+  const answer = sanitizeText(await ctx.chat(synthesisPrompt, opts.finalModelOptions));
+  return finishResult(base, answer);
+}
+
+/**
+ * answerPrompt
+ * The prompt the final answer is written from. The eval's answer-quality
+ * metrics use it too, so they grade the answers the pipeline would give.
+ * @param {string} query
+ * @param {string[]} passages - Retrieved passages, numbered [1], [2], ... in the prompt
+ * @param {object} [options]
+ * @param {boolean} [options.citations=true] - Ask for [n] citations (only when there are passages)
+ * @param {string} [options.context] - Context to use when nothing was retrieved
+ */
+function answerPrompt(query, passages, { citations = true, context } = {}) {
+  const cite = citations && passages.length > 0;
+  const contextText = context ?? passages.map((text, i) => `[${i + 1}] ${text}`).join("\n\n");
+  return [
     "You are a helpful assistant that synthesizes information to answer a user question.",
     "Use the provided contextual passages below to produce a clear, well-structured answer. If the context is insufficient, answer using general knowledge but label it as such.",
     "",
@@ -165,15 +190,6 @@ async function ragPipeline(ctx, query, options = {}) {
     "- If the answer requires caution or is uncertain, say so.",
     ""
   ].join("\n");
-
-  const base = { query, translation, retrieved: mergedIdsOrDocs, sources, cite };
-
-  // Sources are known now, so streaming callers can show them before the first token
-  if (options.stream) return streamAnswer(ctx, synthesisPrompt, base, opts.finalModelOptions);
-
-  ctx.log("[ragPipeline] Synthesizing final answer via LLM...");
-  const answer = sanitizeText(await ctx.chat(synthesisPrompt, opts.finalModelOptions));
-  return finishResult(base, answer);
 }
 
 // Marks which sources the answer cites and returns the final result
@@ -228,4 +244,4 @@ function streamAnswer(ctx, prompt, base, finalModelOptions) {
   };
 }
 
-module.exports = { ragPipeline, citedRefs };
+module.exports = { ragPipeline, citedRefs, answerPrompt };

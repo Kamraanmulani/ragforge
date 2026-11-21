@@ -2,6 +2,35 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [2.3.0] - 2026-11-21
+
+Trust: measure answer quality, catch regressions in CI, and test on the queries real users ask.
+
+### Added
+
+- **`npx ragforge chat --docs ./docs`.** Ask questions about a folder from the terminal. The answer streams in, followed by the passages it cites, the technique used, the cost and the latency. Works with every provider, including fully local with Ollama.
+- **`npx ragforge init [dir]`.** Scaffolds a working RAG app: an Express server with `POST /ask` (or a Next.js route with `--template next`), a sample document, golden questions, npm scripts for the eval and a GitHub workflow that fails pull requests when retrieval quality drops. In an existing project it keeps your files and only adds missing scripts and dependencies to `package.json`.
+- **Eval on real queries.** Three steps: log, label, evaluate.
+  - `createRagforge({ onTrace })` is called with a trace of every `auto()` and `ragPipeline()` call: query, route, sources, citations, answer and stats. A file path (`onTrace: 'traces.jsonl'`) appends them as JSONL. `createTraceLogger(file, { includeText: false })` leaves passage text and answers out of the log. A hook that throws never fails the call.
+  - `npx ragforge label --from-logs traces.jsonl --docs ./docs` shows each real query with candidate passages and asks which one answers it. It uses keyword search, so it needs no API key. Labels are saved after every answer and later runs continue where you stopped.
+  - `npx ragforge eval --from-logs traces.jsonl --docs ./docs` runs the eval on the labelled real queries. It works with `--answers`, `--compare` and `--fail-on-drop`.
+  - `readTraces()` is exported.
+- **Answer-quality eval.** `npx ragforge eval --answers` (or `evaluate({ answers: true })`) writes an answer from each technique's passages, with the pipeline's own prompt, and grades it with an LLM judge. Four new columns sit next to the retrieval scores: **faithfulness** (claims supported by the passages), **answer relevance**, **context recall** and **citation accuracy**, each with a 95% interval across questions. `--judge-model` (`judgeOptions`) picks a different model for the judge.
+- The judge has to quote the passage for every claim, fact or citation it accepts, and the quote is checked in code. A verdict without a valid quote doesn't count. Each question's run lists what lowered its scores in `findings`.
+- Judge prompts are fixed and versioned (`JUDGE_VERSION`, in the result as `answers.judgeVersion`) and run at temperature 0, so scores stay comparable between runs.
+- Techniques that retrieved the same passages share one answer and one set of grades. Answer and judge usage is reported apart from the techniques' cost and latency, which stay retrieval-only.
+- Questions can carry an `expectedAnswer`, used as the reference for context recall.
+- With `--answers` on both runs, `--fail-on-drop` also fails on a faithfulness drop.
+- **CI regression checks.** `npx ragforge eval --compare main.json` prints what changed against an earlier `--json` result: hit@k, MRR, latency and cost for each technique. Add `--fail-on-drop 3` to exit with code 1 when a technique lost more than 3 points of hit@k. It warns when the two runs can't be compared fairly (different questions, top-k or embedding model).
+- `--questions-file` also takes an earlier `--json` result and asks its questions again, so a saved baseline is all a CI check needs. Generated questions are matched on the opening words of their passage, so they follow the content when chunk ids move.
+- `--markdown <file>` writes the scoreboard as Markdown, with the comparison when `--compare` is set.
+- **GitHub Action.** `uses: Kamraanmulani/ragforge@v2.3.0` runs the eval, adds the scoreboard to the job summary, posts it as a pull request comment that is updated on each push, and fails the job on a regression.
+- `compareEvals()`, `formatComparison()` and `renderMarkdownReport()` are exported.
+
+### Fixed
+
+- `--techniques` and `--question-styles` accept spaces as well as commas. On Windows, an npm script's `--techniques baseline,hybrid` reached the CLI as `baseline hybrid` and was rejected as an unknown technique.
+
 ## [2.2.0] - 2026-11-13
 
 Reach: ragforge works inside the AI coding tools developers already use.
@@ -95,6 +124,7 @@ Most code needs no changes: `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, 
 
 First stable release with HyDE, Chain-of-Thought, Step-Back, Fan-Out, RRF and the RAG pipeline.
 
+[2.3.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.0.1...v2.1.0
 [2.0.0]: https://github.com/Kamraanmulani/ragforge/compare/v1.1.0...v2.0.0
