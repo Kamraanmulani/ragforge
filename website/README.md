@@ -45,7 +45,15 @@ Inside this repository the docs and changelog are read from the repo root, so th
 
 The scoreboard, code samples, provider table and questions on the landing page are in `src/data/site.js`.
 
-## Deploy
+## Deploy on Vercel
+
+`vercel.json` serves the built client from `dist/` as static files and runs the API as one serverless function, `api/[...path].js`, which mounts the same Express routes. Before each build, `npm run sync-content` copies the repo's `README.md`, `CHANGELOG.md` and `package.json` into `content/`, which ships with the function. Commit `content/` so a deploy from the website folder alone still has the current docs.
+
+Import the GitHub repo on vercel.com and set **Root Directory** to `website`; the framework (Vite), build command and output folder come from `vercel.json`. Or run `npx vercel --prod` from this folder.
+
+The rate limit is kept in memory, so on Vercel it applies per function instance, not globally.
+
+## Deploy on a Node host
 
 Any Node host works (Render, Railway, Fly.io, a VPS). Use `website/` as the root directory, `npm install && npm run build` as the build command and `npm start` as the start command.
 

@@ -7,20 +7,26 @@ const { chunkText, createBM25Index } = require("ragforge");
 
 const GITHUB = "https://github.com/Kamraanmulani/ragforge";
 
+// A folder holding ragforge's package.json, README.md and CHANGELOG.md
+function isContentDir(dir) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    return pkg.name === "ragforge" && fs.existsSync(path.join(dir, "README.md")) && fs.existsSync(path.join(dir, "CHANGELOG.md"));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * findContentDir
- * Inside the ragforge repo the docs come from the repo root, so the site follows
- * the README as it is edited. Deployed on its own, they come from the installed package.
+ * 1. The ragforge repo root, so local dev follows the README as it is edited.
+ * 2. website/content/, the copy `npm run sync-content` makes; serverless hosts such
+ *    as Vercel only ship files inside the website folder.
+ * 3. The installed ragforge package, which also carries both files.
  */
 function findContentDir() {
-  const repo = path.resolve(__dirname, "..", "..");
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
-    if (pkg.name === "ragforge" && fs.existsSync(path.join(repo, "README.md"))) return repo;
-  } catch {
-    // Not inside the repo
-  }
-  return path.dirname(require.resolve("ragforge/package.json"));
+  const candidates = [path.resolve(__dirname, "..", ".."), path.resolve(__dirname, "..", "content")];
+  return candidates.find(isContentDir) ?? path.dirname(require.resolve("ragforge/package.json"));
 }
 
 // GitHub's heading anchors: lowercase, punctuation dropped, spaces to hyphens

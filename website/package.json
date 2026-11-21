@@ -5,6 +5,8 @@
   "description": "Product website for ragforge: React client, Express API that runs on ragforge itself",
   "scripts": {
     "dev": "node --watch-path=server server/dev.mjs",
+    "sync-content": "node scripts/sync-content.js",
+    "prebuild": "node scripts/sync-content.js",
     "build": "vite build",
     "start": "node server/index.js",
     "test": "node --test server/api.test.js"

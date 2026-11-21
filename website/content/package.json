@@ -1,0 +1,134 @@
+{
+  "name": "ragforge",
+  "version": "2.3.1",
+  "description": "Find the RAG retrieval setup that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, hybrid BM25 search and reranking, benchmarked on your documents (Markdown, HTML, PDF, DOCX) and routed per query, with citations and streaming, for OpenAI, Anthropic, Gemini, Ollama or local embeddings, and any vector database. Grades answer faithfulness with an LLM judge, fails CI when retrieval quality drops, and evaluates on real user queries. Includes an MCP server for coding agents.",
+  "keywords": [
+    "rag",
+    "genai",
+    "retrieval-augmented-generation",
+    "hyde",
+    "chain-of-thought",
+    "step-back",
+    "rrf",
+    "fan-out",
+    "ai",
+    "query-translation",
+    "llm",
+    "openai",
+    "ollama",
+    "vector-search",
+    "embeddings",
+    "query-expansion",
+    "evaluation",
+    "benchmark",
+    "rag-evaluation",
+    "hybrid-search",
+    "bm25",
+    "reranker",
+    "rerank",
+    "cohere",
+    "citations",
+    "pdf",
+    "mcp",
+    "mcp-server",
+    "faithfulness",
+    "llm-as-judge",
+    "regression-testing",
+    "github-action",
+    "rag-pipeline"
+  ],
+  "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
+  "bugs": {
+    "url": "https://github.com/Kamraanmulani/ragforge/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kamraanmulani/ragforge.git"
+  },
+  "license": "MIT",
+  "author": "kamraanmulani",
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "ragforge": "bin/ragforge.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin/",
+    "src/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit",
+    "test:integration": "jest tests/integration --runInBand",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit --watch",
+    "typecheck": "tsc --noEmit --strict index.d.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "openai": "^6.1.0"
+  },
+  "peerDependencies": {
+    "@huggingface/transformers": ">=3.0.0",
+    "mammoth": ">=1.6.0",
+    "unpdf": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    },
+    "mammoth": {
+      "optional": true
+    },
+    "unpdf": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@qdrant/js-client-rest": "^1.15.1",
+    "jest": "^30.2.0",
+    "mammoth": "^1.13.0",
+    "typescript": "^5.9.3",
+    "unpdf": "^1.8.1"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json",
+    "./src/*.js": "./src/*.js",
+    "./src/*": "./src/*.js",
+    "./pgvector": {
+      "types": "./src/stores/pgvector.d.ts",
+      "default": "./src/stores/pgvector.js"
+    },
+    "./qdrant": {
+      "types": "./src/stores/qdrant.d.ts",
+      "default": "./src/stores/qdrant.js"
+    },
+    "./chroma": {
+      "types": "./src/stores/chroma.d.ts",
+      "default": "./src/stores/chroma.js"
+    },
+    "./pinecone": {
+      "types": "./src/stores/pinecone.d.ts",
+      "default": "./src/stores/pinecone.js"
+    },
+    "./lancedb": {
+      "types": "./src/stores/lancedb.d.ts",
+      "default": "./src/stores/lancedb.js"
+    },
+    "./supabase": {
+      "types": "./src/stores/supabase.d.ts",
+      "default": "./src/stores/supabase.js"
+    }
+  }
+}
