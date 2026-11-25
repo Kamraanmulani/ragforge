@@ -241,4 +241,4 @@ ${questionRows}
 `;
 }
 
-module.exports = { formatTable, renderHtmlReport, answerHeaders, answerCells, answerNote, contextNote };
+module.exports = { formatTable, renderHtmlReport, answerHeaders, answerCells, answerNote, contextNote, usd, esc, pct, ms };

@@ -19,6 +19,8 @@ const { JUDGE_VERSION } = require("./src/eval/judge");
 const { createTraceLogger, readTraces } = require("./src/core/trace");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 const { startMcpServer } = require("./src/mcp/server");
+const { loadConfig } = require("./src/tune/config");
+const { formatTuneTable, renderTuneHtml } = require("./src/tune/report");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -57,6 +59,9 @@ module.exports = {
   createTraceLogger,
   readTraces,
   startMcpServer,
+  loadConfig,
+  formatTuneTable,
+  renderTuneHtml,
 
   // v1 API (default instance)
   hyde: (query, options) => getDefault().hyde(query, options),

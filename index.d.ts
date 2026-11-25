@@ -132,6 +132,12 @@ export interface RagforgeOptions {
    * A hook that throws is logged and never fails the call.
    */
   onTrace?: ((trace: Trace) => void) | string;
+  /**
+   * The setup `ragforge tune` picked: a ragforge.config.json object or its path. Sets the
+   * providers and models, the technique auto() uses, topK, and how rf.index() chunks.
+   * Options passed here win over the config.
+   */
+  config?: TunedConfig | string;
 }
 
 /** One auto() or ragPipeline() call: what was asked, how it was routed, what the answer was written from */
@@ -469,8 +475,9 @@ export interface RouteOptions extends CallOptions {
 export interface Route {
   technique: string;
   category: QueryCategory;
-  classifier: "rules" | "llm";
-  decidedBy: "rules" | "eval";
+  classifier: "rules" | "llm" | "config";
+  /** "config": the technique from a tuned config (createRagforge({ config })) */
+  decidedBy: "rules" | "eval" | "config";
   reason: string;
 }
 
@@ -534,6 +541,18 @@ export interface Ragforge {
   readonly llm: Provider;
   readonly embedder: Provider;
   readonly cache: Cache | null;
+  /** Find the best retrieval setup for your documents within a budget */
+  tune(options: TuneOptions): Promise<TuneResult>;
+  /**
+   * Chunk and embed documents into an in-memory store (vectors + BM25) and use it.
+   * With a tuned config, chunking and contextual retrieval follow the config.
+   */
+  index(
+    documents: Array<string | { id?: string; content: string }>,
+    options?: { chunkSize?: number; chunkStrategy?: ChunkStrategy; chunkOverlap?: number; contextual?: boolean; contextOptions?: ContextOptions; concurrency?: number; onProgress?: (p: { phase: "context" | "index"; done: number; total: number }) => void }
+  ): Promise<{ count: number; contextual: ContextualizeResult | null; store: MemoryVectorStore }>;
+  /** The tuned config this instance was created with, or null */
+  readonly config: TunedConfig | null;
 }
 
 export function createRagforge(options?: RagforgeOptions): Ragforge;
@@ -595,6 +614,10 @@ export const CHUNK_STRATEGIES: ChunkStrategy[];
 export interface McpServerOptions {
   /** Documents from loadDocuments() */
   documents: Array<{ id: string; content: string }>;
+  /** Passages per search_docs / ask call when the agent doesn't say (default 5) */
+  topK?: number;
+  /** A tuned config: `ask` answers with its technique */
+  config?: TunedConfig | string;
   /** Max characters per passage (default 800) */
   chunkSize?: number;
   /** How documents are split (default "paragraph"). "semantic" needs an embedder */
@@ -645,6 +668,149 @@ export function htmlToText(html: string): string;
 
 /** Plain-text scoreboard for an evaluate() result */
 export function formatTable(result: EvalResult): string;
+
+/** The setup ragforge tune picked, as written to ragforge.config.json */
+export interface TunedConfig {
+  version: 1;
+  /** Built-in provider name for chat (e.g. "openai") */
+  llm?: string;
+  chatModel?: string;
+  /** Built-in provider name for embeddings */
+  embeddings?: string;
+  embeddingModel?: string;
+  chunking: { strategy: ChunkStrategy; size: number; overlap: number };
+  /** Index with context lines (rf.index does) */
+  contextual: boolean;
+  /** The eval technique to use for every query, e.g. "hybrid" or "hybrid+hyde" */
+  technique: string;
+  hybrid: boolean;
+  rerank: boolean;
+  reranker: string | null;
+  topK: number;
+  /** How the setup scored when it was tuned */
+  tuned?: {
+    at: string;
+    ragforge: string;
+    questions: number;
+    hitRate: number;
+    mrr: number;
+    avgCostUSD: number | null;
+    indexCostUSD: number | null;
+    default: { hitRate: number; mrr: number } | null;
+    reason: string;
+  };
+}
+
+export interface TuneOptions {
+  documents: Array<string | { id?: string; content: string }>;
+  /** Ground truth matched by text (chunk ids change with the chunking). Generated when omitted */
+  questions?: Array<{ question: string; expectedText?: string; source?: string; expectedAnswer?: string }>;
+  /** Questions to generate (default 20) */
+  numQuestions?: number;
+  questionStyles?: Array<"question" | "keywords" | "conceptual">;
+  /** Default ["paragraph", "markdown-heading", "sentence"] */
+  chunkStrategies?: ChunkStrategy[];
+  /** Default [400, 800, 1200] */
+  chunkSizes?: number[];
+  /** Default: the embedder's model, plus text-embedding-3-small with OpenAI */
+  embeddingModels?: string[];
+  /** Techniques tried on the best setups (every setup gets baseline and hybrid) */
+  techniques?: EvalTechnique[];
+  /** Also try contextual retrieval on the best setups */
+  contextual?: boolean;
+  contextOptions?: ContextOptions;
+  /** Setups that get the costlier techniques (default 3) */
+  topSetups?: number;
+  /** Most the run may spend, in USD (default 0.5). null for no limit */
+  budgetUSD?: number | null;
+  topK?: number;
+  rerankCandidates?: number;
+  /** Gain a costlier technique needs over the best free one (default 0.05) */
+  minImprovement?: number;
+  /**
+   * To replace what it competes with (the default setup, or the best free trial), a trial must
+   * rank the right chunk higher on this many more questions than it ranks it lower (default 2)
+   */
+  minGainQuestions?: number;
+  concurrency?: number;
+  llmOptions?: LLMOptions;
+  /** Called with the plan and its cost estimate before anything is spent */
+  onPlan?: (plan: TunePlan) => void;
+  onProgress?: (progress: { phase: "questions" | "screen" | "refine"; step?: number; steps?: number; setup?: string; detail?: string; done: number; total: number }) => void;
+}
+
+export interface TunePlan {
+  setups: number;
+  chunkStrategies: ChunkStrategy[];
+  chunkSizes: number[];
+  embeddingModels: string[];
+  screenTechniques: string[];
+  refineTechniques: string[];
+  topSetups: number;
+  questions: number;
+  generateQuestions: boolean;
+  budgetUSD: number | null;
+  /** USD; null when a price is unknown */
+  estimate: { questions: number | null; screening: number | null; refining: number | null; total: number | null };
+}
+
+/** One index setup with one technique */
+export interface TuneTrial {
+  /** "<strategy>/<size>/<embedding model> <technique>" */
+  id: string;
+  setupId: string;
+  setup: { chunkStrategy: ChunkStrategy; chunkSize: number; embeddingModel: string };
+  /** The default setup's baseline: what you'd get without tuning */
+  isDefault: boolean;
+  technique: string;
+  stage: "screen" | "refine";
+  hitRate: number;
+  mrr: number;
+  avgCostUSD: number | null;
+  avgLatencyMs: number;
+  avgLlmCalls: number;
+  errors: number;
+  /** Rank of the right chunk for each question, 0 when it wasn't retrieved */
+  ranks: number[];
+  chunkCount: number | null;
+  /** Average chunk length: bigger chunks send more text to the LLM with every answer */
+  avgChunkChars: number;
+  /** Paid once per index build: chunk embeddings, plus context lines for contextual */
+  indexCostUSD: number | null;
+}
+
+export interface TuneResult {
+  version: 1;
+  topK: number;
+  questionCount: number;
+  budgetUSD: number | null;
+  /** What the run really spent (repeated calls are made once) */
+  spent: Stats;
+  /** Why the search stopped before the end, or null */
+  stopped: string | null;
+  plan: TunePlan;
+  /** Trial ids */
+  best: string;
+  default: string | null;
+  reason: string;
+  /** Trials no other trial beats on both quality and cost, cheapest first */
+  pareto: string[];
+  trials: TuneTrial[];
+  /** Write this to ragforge.config.json */
+  config: TunedConfig;
+  provider: { llm: string; chatModel: string | null; embeddings: string };
+  warnings: string[];
+  questions: Array<{ question: string; expectedText: string; style?: string; source?: string }>;
+}
+
+/** Read and check a ragforge.config.json (object or path) */
+export function loadConfig(config: TunedConfig | string, options?: { cwd?: string }): TunedConfig;
+
+/** Plain-text summary of a tune() result */
+export function formatTuneTable(result: TuneResult, options?: { rows?: number }): string;
+
+/** Self-contained HTML page with the cost/quality chart and every trial */
+export function renderTuneHtml(result: TuneResult, options?: { title?: string }): string;
 
 /** Standalone HTML report for an evaluate() result */
 export function renderHtmlReport(result: EvalResult, options?: { title?: string }): string;
