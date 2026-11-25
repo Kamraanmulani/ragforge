@@ -17,6 +17,7 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 
 [Quick start](#quick-start) ·
 [Eval](#benchmark-techniques-on-your-data) ·
+[Tune](#tune-the-whole-setup) ·
 [Auto-routing](#auto-routing) ·
 [Techniques](#techniques) ·
 [API](#api-reference) ·
@@ -290,6 +291,65 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 ```
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
+
+## Tune the whole setup
+
+`eval` compares query techniques on one index. `tune` also changes how the index is built: chunking strategy, chunk size and embedding model. It finds the combination that works best on your documents, within a budget, and writes it to a config file your app loads.
+
+```bash
+npx ragforge tune --docs ./docs --budget 0.50 --html tune.html
+```
+
+```
+Plan: 8 setups (paragraph, sentence × 800, 1200 chars × text-embedding-ada-002, text-embedding-3-small) with baseline and hybrid, then the best 1 with hyde, stepback, fanout, hybrid+hyde, hybrid+stepback, hybrid+fanout, on 20 generated questions.
+Estimated cost: $0.0275 (questions $0.0013, screening $0.0102, refining $0.0159), budget $0.1.
+...
+★ Best: sentence/800/text-embedding-3-small · baseline
+  baseline on sentence/800/text-embedding-3-small found the right chunk 80% of the time vs 60% for the default setup, with no extra LLM calls. hybrid+fanout on sentence/800/text-embedding-3-small scored 80%, not a clear enough gain to justify its extra cost.
+  Changes from the default: chunking paragraph → sentence, embeddings text-embedding-ada-002 → text-embedding-3-small. hit@5 60% → 80% (+20 points).
+Spent $0.0176 of a $0.1 budget (estimated $0.0275).
+
+Config written to ragforge.config.json.
+```
+
+<sub>A real run on ragforge's own README, changelog and plan (83 KB of Markdown) with `--chunk-strategies paragraph,sentence --chunk-sizes 800,1200 --top-setups 1 --budget 0.10`. It took 3 minutes. The full default search (18 setups, 3 refined) cost $0.03 and took 9 minutes.</sub>
+
+How it searches:
+
+1. **Questions.** It writes test questions from short passages of your documents, once, and checks every setup against the same questions. Each passage is matched by its text, so a question still finds its answer when the chunking changes.
+2. **Screen.** Every index setup runs with the techniques that add no LLM call per query: plain vector search and hybrid search.
+3. **Refine.** The best setups (`--top-setups`, default 3) also run the costlier techniques: HyDE, Step-Back and Fan-Out with and without keyword search, plus reranking with `--reranker` and contextual retrieval with `--contextual`.
+4. **Pick.** The best of many noisy scores is often just lucky, so a challenger has to win clearly. A setup replaces the default only if it ranks the right chunk higher on at least 2 more questions than it ranks it lower, comparing question by question. A cheaper setup (20% or more, per query or to index) that is about as good is preferred to a pricier one. A technique that adds LLM calls, reranking or context lines must also beat the chosen free setup by 5 points of hit@k. Ties keep the default, since a tie is no reason to rebuild your index.
+
+It stays within the budget. The cost of every step is estimated before it runs, steps that don't fit are skipped (and listed), and the run never starts if screening alone costs more than the budget. Each distinct API call is made only once. The same chunk embedded for two setups, or the same HyDE draft for two techniques, is paid for once. Cost per query is still reported as production would pay it.
+
+`--html` writes a chart of hit rate against cost per query for every trial. It marks the *Pareto front*: the trials no other trial beats on both quality and cost, so you can see what more money buys. The tables also show the average chunk length, because bigger chunks find more but send more text to the LLM with every answer.
+
+| Option | Default | |
+|---|---|---|
+| `--budget <usd\|none>` | `0.50` | Most the whole run may spend |
+| `--chunk-strategies <list>` | `paragraph,markdown-heading,sentence` | See [Chunking](#chunking) |
+| `--chunk-sizes <list>` | `400,800,1200` | Characters |
+| `--embedding-models <list>` | the provider's (+ `text-embedding-3-small` on OpenAI) | Changing the model means re-embedding your store |
+| `--techniques <list>` | `hyde,stepback,fanout` and their `hybrid+` forms | Tried on the best setups |
+| `--top-setups <n>` | `3` | Setups that get the costlier techniques |
+| `--questions <n>` | `20` | Or `--questions-file`, e.g. an earlier `eval --json` result |
+| `--reranker`, `--contextual` | | Add reranking or contextual retrieval to the search |
+| `--out <file>` | `ragforge.config.json` | Where the winner is written |
+| `--json`, `--html` | | Every trial; the HTML has the chart |
+
+Use the result in your app. The config sets the providers and models, the technique every query uses, `topK`, and how `rf.index()` chunks (and whether it adds context lines):
+
+```js
+const rf = createRagforge({ config: 'ragforge.config.json' });
+await rf.index(await loadDocuments('./docs')); // in-memory index, built the tuned way
+const { answer, route } = await rf.auto('How long do refunds take?');
+// route.decidedBy === 'config'
+```
+
+With your own vector store, read the tuned chunking from `rf.config.chunking` when you index, embed with `rf.getEmbedding()` (it uses the tuned model), and pass the store to `createRagforge`. Options you pass to `createRagforge` win over the config. `chat` and `mcp` take `--config ragforge.config.json` too.
+
+Tune on 20 or more questions. With fewer, a difference of a point or two is noise, and the report says so.
 
 ## Evaluate on real user queries
 
@@ -841,6 +901,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | `defaults` | LLM options | `{ temperature: 0.7, maxTokens: 500 }` |
 | `debug` | `boolean` | `false` |
 | `logger` | `{ info, error }` | silent |
+| `config` | `ragforge.config.json` object or path, from `ragforge tune` | none |
 
 </details>
 
@@ -850,6 +911,8 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | Method | Returns |
 |---|---|
 | `evaluate(options)` | Scoreboard, recommendation and per-question results |
+| `tune(options)` | Every trial, the best setup, the Pareto front and `config` (write it to `ragforge.config.json`) |
+| `index(documents, options)` | Builds and uses an in-memory index, chunked the tuned way: `{ count, contextual, store }` |
 | `contextualize(chunks, documents, options)` | `{ chunks, estimate, cached, failed, errors, stats }`; each chunk gains `context` and `indexText` |
 | `estimateContextCost(chunks, documents, options)` | `{ chunks, cached, calls, inputTokens, outputTokens, model, costUSD }` |
 | `auto(query, options)` | Pipeline result plus `route` |
@@ -866,13 +929,14 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
 **Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `contextual` (false), `contextOptions`, `onProgress`.
 **Context options:** `model`, `llmOptions`, `cache`, `budgetUSD`, `maxDocumentChars` (24000), `concurrency` (4), `onEstimate`, `onProgress`.
+**Tune options:** `documents`, `questions`, `numQuestions` (20), `chunkStrategies`, `chunkSizes`, `embeddingModels`, `techniques`, `contextual`, `contextOptions`, `topSetups` (3), `budgetUSD` (0.5, `null` for none), `topK` (5), `rerankCandidates` (20), `minImprovement` (0.05), `concurrency` (4), `llmOptions`, `onPlan`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createFileCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createFileCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`, `loadConfig`, `formatTuneTable`, `renderTuneHtml`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

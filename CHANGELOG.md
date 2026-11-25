@@ -6,6 +6,24 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **`npx ragforge tune`.** Finds the retrieval setup that works best on your documents: chunking strategy × chunk size × embedding model × query technique (hybrid, HyDE, Step-Back, Fan-Out, rerank, contextual), within a USD budget (`--budget`, default $0.50). It writes the winner to `ragforge.config.json`.
+  - Successive halving: every index setup is screened with plain and hybrid search, then the best few (`--top-setups`) also try the techniques that add LLM calls, reranking or context lines.
+  - The plan and its estimated cost are printed before anything is spent. Every step is estimated and checked against the budget, steps that don't fit are skipped and listed, and the run won't start if screening alone is over budget.
+  - Each distinct API call is made once: a chunk embedded for two setups, or a HyDE draft used by two techniques, is paid for once. Cost per query is still reported as production would pay.
+  - Questions are generated once from short passages and matched by their text, so every setup is scored on the same questions.
+  - The pick needs a clear win, since the best of many noisy scores is often just lucky. A setup replaces the default only when, question by question, it ranks the right chunk higher on at least 2 more questions than it ranks it lower (`minGainQuestions`). A materially cheaper setup that is about as good is preferred. A technique that adds cost must also beat the chosen free setup by 5 points. Ties keep the default.
+  - Reused calls wait as long as the original call took, so the latency reported for every trial is real.
+  - The report lists the best trials, what changed from the default and the spend. `--html` adds a chart of hit rate against cost per query that marks the Pareto front. Tables show the average chunk length, since bigger chunks send more text to the LLM.
+  - `rf.tune(options)` does the same in code. `formatTuneTable()`, `renderTuneHtml()` and `loadConfig()` are exported.
+- **`createRagforge({ config })`.** Loads `ragforge.config.json` (object or path): providers, models, `topK`, and the technique every `auto()` call uses (`route.decidedBy: 'config'`). Options you pass still win.
+- **`rf.index(documents)`.** Builds and uses an in-memory index (vectors and BM25), chunked the way the config says and with context lines when it is contextual. `rf.config` is the loaded config.
+- `chat` and `mcp` take `--config ragforge.config.json`.
+
+### Fixed
+
+- `mcp --top-k` now sets the default number of passages per `search_docs` and `ask` call. The help described it, but the server ignored it.
+- `chat` prints each source on one line, including chunks that start with a heading trail.
+
 - **Contextual retrieval.** At index time, an LLM writes a line that places each chunk in its document. The line is embedded and keyword-indexed with the chunk, while sources and answers keep the chunk as written.
   - `npx ragforge eval --contextual` scores two new techniques, `contextual` and `contextual+hybrid`, next to the others. `contextual` combines with the rest (`contextual+rerank`, `contextual+hyde`). In code: `evaluate({ contextual: true })`, or list them in `techniques`.
   - The cost is estimated and printed before any line is written. `--context-budget <usd>` (`contextOptions.budgetUSD`) stops when the estimate is higher, or when the model has no known price. `--context-model` picks the model that writes the lines.

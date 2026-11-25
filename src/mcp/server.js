@@ -73,7 +73,7 @@ function formatPassages(chunks) {
  * createTools
  * The three tools. Each returns the text shown to the agent.
  */
-function createTools(getIndex, getRagforge) {
+function createTools(getIndex, getRagforge, defaultTopK = DEFAULT_TOP_K) {
   return [
     {
       name: "search_docs",
@@ -82,14 +82,14 @@ function createTools(getIndex, getRagforge) {
         type: "object",
         properties: {
           query: { type: "string", description: "What to look for: keywords, error codes, names or a question" },
-          top_k: { type: "integer", minimum: 1, maximum: MAX_TOP_K, default: DEFAULT_TOP_K, description: "Passages to return" },
+          top_k: { type: "integer", minimum: 1, maximum: MAX_TOP_K, default: defaultTopK, description: "Passages to return" },
         },
         required: ["query"],
       },
       async run({ query, top_k }) {
         if (typeof query !== "string" || !query.trim()) throw new Error("query must be a non-empty string");
         const index = await getIndex();
-        const hits = await searchIndex(index, query, topKArg(top_k));
+        const hits = await searchIndex(index, query, topKArg(top_k, defaultTopK));
         if (!hits.length) return `No passages match "${query}".`;
         return formatPassages(hits);
       },
@@ -121,13 +121,13 @@ function createTools(getIndex, getRagforge) {
         type: "object",
         properties: {
           question: { type: "string", description: "The question to answer" },
-          top_k: { type: "integer", minimum: 1, maximum: MAX_TOP_K, default: DEFAULT_TOP_K },
+          top_k: { type: "integer", minimum: 1, maximum: MAX_TOP_K, default: defaultTopK },
         },
         required: ["question"],
       },
       async run({ question, top_k }) {
         if (typeof question !== "string" || !question.trim()) throw new Error("question must be a non-empty string");
-        const topK = topKArg(top_k);
+        const topK = topKArg(top_k, defaultTopK);
         const index = await getIndex();
         const rf = getRagforge();
         if (!rf) {
@@ -154,6 +154,8 @@ function createTools(getIndex, getRagforge) {
  * @param {number} [options.concurrency=4] - Parallel embedding requests
  * @param {boolean} [options.contextual=false] - Give each passage an LLM-written context line before indexing (needs llm)
  * @param {object} [options.contextOptions] - { model, cache, budgetUSD, maxDocumentChars, onEstimate }, see rf.contextualize
+ * @param {number} [options.topK=5] - Passages per search_docs / ask call when the agent doesn't say
+ * @param {object} [options.config] - A tuned config (ragforge tune): `ask` uses its technique
  * @param {object|null} [options.embedder] - Embedding provider. Null means keyword search only.
  * @param {object|null} [options.llm] - Chat provider for `ask`. Null means no answers.
  * @param {ReadableStream} [options.stdin=process.stdin]
@@ -169,6 +171,8 @@ async function startMcpServer(options) {
     chunkOverlap = 0,
     concurrency = 4,
     contextual = false,
+    topK = DEFAULT_TOP_K,
+    config = null,
     contextOptions = {},
     llm = null,
     stdin = process.stdin,
@@ -190,7 +194,8 @@ async function startMcpServer(options) {
 
   // Indexing starts right away; tool calls wait for it. `ask` works once the index is ready.
   let rf = null;
-  const instance = llm ? createRagforge({ llm, embeddings: embedder, hybrid: true }) : null;
+  topKArg(topK);
+  const instance = llm ? createRagforge({ llm, embeddings: embedder, hybrid: true, ...(config && { config }) }) : null;
   const indexing = buildIndex(documents, {
     chunkSize,
     chunkStrategy,
@@ -218,7 +223,7 @@ async function startMcpServer(options) {
   });
   indexing.catch((err) => log(`indexing failed: ${err.message || err}`));
 
-  const tools = createTools(() => indexing, () => rf);
+  const tools = createTools(() => indexing, () => rf, topK);
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
 
   async function dispatch(method, params) {

@@ -18,17 +18,24 @@ const { estimateLine, doneLine } = require("./indexing/contextual");
 
 const { runChat, indexDocuments } = require("./chat");
 const { init, TEMPLATES } = require("./init");
+const { formatTuneTable, renderTuneHtml } = require("./tune/report");
+const { loadConfig } = require("./tune/config");
 
 const DEFAULT_LABELS_FILE = "ragforge-labels.json";
 const DEFAULT_CONTEXT_CACHE = ".ragforge/context-cache.json";
+const DEFAULT_CONFIG_FILE = "ragforge.config.json";
+const DEFAULT_TUNE_BUDGET = 0.5;
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
+       ragforge tune --docs <file|dir> [--budget <usd>] [options]
        ragforge label --from-logs <file> --docs <file|dir> [options]
        ragforge chat --docs <file|dir> [options]
        ragforge init [dir] [--template express|next]
        ragforge mcp --docs <file|dir> [options]
 
 eval: benchmarks RAG query techniques on your documents and recommends one.
+tune: searches chunking, chunk size, embedding model and technique within a budget,
+      and writes the winner to ragforge.config.json for createRagforge({ config }).
 label: shows real queries from a trace log and asks which passage answers each one.
        The labels are saved and used by eval --from-logs. Needs no API key.
 chat:  answers your questions about the documents in the terminal, with sources.
@@ -108,6 +115,28 @@ Chat options (chat command):
                             As above. Type a question and press Enter; exit or Ctrl+D to leave.
                             Each question is answered on its own, without earlier turns.
 
+Tune options (tune command):
+  --budget <usd|none>       Most the whole run may spend (default $${DEFAULT_TUNE_BUDGET}). The cost
+                            is estimated first and every step is checked against it
+  --chunk-strategies <list> Strategies to try (default paragraph,markdown-heading,sentence)
+  --chunk-sizes <list>      Chunk sizes to try (default 400,800,1200)
+  --embedding-models <list> Embedding models to try (default: the provider's, plus
+                            text-embedding-3-small with openai)
+  --techniques <list>       Techniques tried on the best setups (default hyde, stepback,
+                            fanout and their hybrid+ forms; rerank with --reranker,
+                            contextual with --contextual). Every setup gets baseline and hybrid
+  --top-setups <n>          Setups that get the costlier techniques (default 3)
+  --questions <n>           Questions to generate (default 20), or --questions-file
+  --out <file>              Where the winning setup is written (default ${DEFAULT_CONFIG_FILE})
+  --json, --html            Full results; the HTML has a cost/quality chart
+  --docs, --provider, --embeddings, --model, --embedding-model, --reranker, --contextual,
+  --context-model, --context-cache, --top-k, --concurrency
+                            As for eval
+
+Config option (chat and mcp):
+  --config <file>           Use the setup from ragforge tune: providers, models, chunking,
+                            contextual and technique. Flags you pass still win
+
 Init options (init command):
   --template <name>         express (default): server with POST /ask
                             next: Next.js App Router route at /api/ask
@@ -138,6 +167,8 @@ Examples:
   npx ragforge chat --docs ./docs --provider ollama --model qwen2.5
   npx ragforge init my-rag-app
   npx ragforge init --template next
+  npx ragforge tune --docs ./docs --budget 0.50 --html tune.html
+  npx ragforge chat --docs ./docs --config ragforge.config.json
   npx ragforge eval --from-logs traces.jsonl --docs ./docs
 `;
 
@@ -319,6 +350,13 @@ async function main(argv, io = {}) {
         markdown: { type: "string" },
         compare: { type: "string" },
         "fail-on-drop": { type: "string" },
+        budget: { type: "string" },
+        "chunk-strategies": { type: "string" },
+        "chunk-sizes": { type: "string" },
+        "embedding-models": { type: "string" },
+        "top-setups": { type: "string" },
+        out: { type: "string" },
+        config: { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -338,6 +376,7 @@ async function main(argv, io = {}) {
   if (command === "chat") return runChatCommand(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd, factory });
   if (command === "init") return runInit(values, positionals[1], { stdout, stderr, cwd });
   if (command === "label") return runLabel(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
+  if (command === "tune") return runTune(values, { stdout, stderr, cwd, factory });
 
   if (command !== "eval") {
     stderr.write(`Unknown command "${command}".\n\n${HELP}`);
@@ -437,6 +476,145 @@ async function main(argv, io = {}) {
     stderr.write(`\nError: ${err.message}\n`);
     return 1;
   }
+}
+
+// --budget: dollars, or "none" for no limit
+function toBudget(value) {
+  if (value === undefined) return DEFAULT_TUNE_BUDGET;
+  if (value.trim().toLowerCase() === "none") return null;
+  const n = Number(value.trim().replace(/^\$/, ""));
+  if (value.trim() === "" || !Number.isFinite(n) || n < 0) throw new Error('--budget must be an amount in US dollars, e.g. 0.50, or "none"');
+  return n;
+}
+
+function toSizes(value) {
+  const list = toList(value);
+  if (list === undefined) return undefined;
+  return list.map((v) => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) throw new Error(`--chunk-sizes must be positive whole numbers, got "${v}"`);
+    return n;
+  });
+}
+
+function costText(x) {
+  if (x === null || x === undefined) return "cost unknown";
+  return x === 0 ? "$0" : x < 0.0001 ? "<$0.0001" : `$${x.toFixed(4)}`;
+}
+
+/**
+ * runTune
+ * Estimates the search, runs it within the budget, prints the best setups and
+ * writes the winner to ragforge.config.json.
+ */
+async function runTune(values, { stdout, stderr, cwd, factory }) {
+  const say = (s = "") => stdout.write(`${s}\n`);
+  try {
+    if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge tune --docs ./docs");
+    if (values["chunk-strategy"] || values["chunk-size"]) throw new Error("tune tries several chunkings: use --chunk-strategies and --chunk-sizes (lists)");
+    if (values["from-logs"]) throw new Error("tune takes --questions-file, not --from-logs. Run eval --from-logs --json run.json first and pass run.json");
+    const budgetUSD = toBudget(values.budget);
+    const strategies = toList(values["chunk-strategies"]);
+    strategies?.forEach((s) => {
+      if (!CHUNK_STRATEGIES.includes(s)) throw new Error(`--chunk-strategies: "${s}" is not one of ${CHUNK_STRATEGIES.join(", ")}`);
+    });
+    const sizes = toSizes(values["chunk-sizes"]);
+    const topSetups = values["top-setups"] === undefined ? undefined : toCount(values["top-setups"], "top-setups");
+    const techniques = toList(values.techniques);
+    const { contextual, contextOptions } = contextFlags(values, { cwd, enabled: values.contextual || Boolean(techniques?.some(usesContextual)) });
+    const questions = values["questions-file"] ? readQuestions(path.resolve(cwd, values["questions-file"])) : undefined;
+    const outFile = values.out ?? DEFAULT_CONFIG_FILE;
+
+    const documents = await loadDocuments(values.docs, { cwd, code: Boolean(strategies?.includes("code")) });
+    if (!documents.length) throw new Error(NO_DOCUMENTS);
+
+    const provider = values.provider ?? "openai";
+    const rf = factory({
+      llm: makeProvider(provider, { chatModel: values.model }),
+      embeddings: makeProvider(embeddingsProviderName(values, provider), { embeddingModel: values["embedding-model"] }),
+      reranker: values.reranker,
+    });
+
+    stderr.write(`Tuning on ${documents.length} document(s) with ${provider}...\n`);
+    const live = Boolean(stderr.isTTY);
+    let lastStep = null;
+    const result = await rf.tune({
+      documents,
+      questions,
+      numQuestions: toInt(values.questions, "questions"),
+      chunkStrategies: strategies,
+      chunkSizes: sizes,
+      embeddingModels: toList(values["embedding-models"]),
+      techniques,
+      contextual,
+      contextOptions,
+      topSetups,
+      budgetUSD,
+      topK: toInt(values["top-k"], "top-k"),
+      rerankCandidates: toInt(values["rerank-candidates"], "rerank-candidates"),
+      concurrency: toInt(values.concurrency, "concurrency"),
+      onPlan: (plan) => {
+        const e = plan.estimate;
+        const refine = plan.topSetups ? `, then the best ${plan.topSetups} with ${plan.refineTechniques.join(", ")}` : "";
+        stderr.write(
+          `Plan: ${plan.setups} setups (${plan.chunkStrategies.join(", ")} × ${plan.chunkSizes.join(", ")} chars × ${plan.embeddingModels.join(", ")}) with ${plan.screenTechniques.join(" and ")}${refine}, on ${plan.questions} ${plan.generateQuestions ? "generated " : ""}questions.\n` +
+            `Estimated cost: ${costText(e.total)} (questions ${costText(e.questions)}, screening ${costText(e.screening)}, refining ${costText(e.refining)})${plan.budgetUSD === null ? ", no budget" : `, budget $${plan.budgetUSD}`}.\n`
+        );
+      },
+      onProgress: ({ phase, step, steps, setup, done, total }) => {
+        const name = phase === "questions" ? "Generating questions" : `${phase === "screen" ? "Screening" : "Refining"} ${step}/${steps} ${setup}`;
+        if (live) {
+          if (name !== lastStep && lastStep !== null) stderr.write("\n");
+          stderr.write(`\r${name}: ${done}/${total}   `);
+        } else if (name !== lastStep) {
+          stderr.write(`${name}...\n`);
+        }
+        lastStep = name;
+      },
+    });
+    stderr.write(live ? "\n\n" : "\n");
+
+    say(formatTuneTable(result));
+    fs.writeFileSync(path.resolve(cwd, outFile), `${JSON.stringify(result.config, null, 2)}\n`);
+    say(`\nConfig written to ${outFile}. Use it with createRagforge({ config: "${outFile}" }), or:`);
+    say(`  npx ragforge chat --docs ${values.docs.map((d) => (/\s/.test(d) ? `"${d}"` : d)).join(" --docs ")} --config ${outFile}`);
+    if (values.json) {
+      fs.writeFileSync(path.resolve(cwd, values.json), JSON.stringify(result, null, 2));
+      say(`JSON written to ${values.json}`);
+    }
+    if (values.html) {
+      fs.writeFileSync(path.resolve(cwd, values.html), renderTuneHtml(result));
+      say(`HTML report written to ${values.html}`);
+    }
+    return 0;
+  } catch (err) {
+    stderr.write(`\nError: ${err.message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * configFlags
+ * --config for chat and mcp: the tuned setup fills in every flag you didn't pass
+ */
+function configFlags(values, cwd) {
+  if (!values.config) return { values, config: null };
+  const config = loadConfig(values.config, { cwd });
+  const filled = { ...values };
+  const fill = (flag, value) => {
+    if (filled[flag] === undefined && value !== undefined && value !== null) filled[flag] = value;
+  };
+  fill("provider", config.llm);
+  if (!values.provider || values.provider === config.llm) fill("model", config.chatModel);
+  fill("embeddings", config.embeddings);
+  if (!values.embeddings || values.embeddings === config.embeddings) fill("embedding-model", config.embeddingModel);
+  fill("chunk-strategy", config.chunking.strategy);
+  fill("chunk-size", String(config.chunking.size));
+  if (config.chunking.overlap) fill("chunk-overlap", String(config.chunking.overlap));
+  fill("top-k", String(config.topK));
+  if (config.contextual && values.contextual === undefined) filled.contextual = true;
+  fill("reranker", config.reranker);
+  return { values: filled, config };
 }
 
 function readLabels(file) {
@@ -540,9 +718,10 @@ async function runLabel(values, { stdin, stdout, stderr, cwd }) {
  * runChatCommand
  * Indexes the documents in memory, then answers questions typed in the terminal.
  */
-async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
+async function runChatCommand(flags, { stdin, stdout, stderr, cwd, factory }) {
   try {
-    if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge chat --docs ./docs");
+    if (!flags.docs) throw new Error("--docs is required, e.g. npx ragforge chat --docs ./docs");
+    const { values, config } = configFlags(flags, cwd);
     const provider = values.provider ?? "openai";
     if (provider === "local") throw new Error("chat needs a chat model, and local has none. Use --provider openai (or ollama, ...) with --embeddings local.");
     const chunking = chunkingFlags(values);
@@ -553,7 +732,10 @@ async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
     const rf = factory({
       llm: makeProvider(provider, { chatModel: values.model }),
       embeddings: makeProvider(embeddingsProviderName(values, provider), { embeddingModel: values["embedding-model"] }),
+      reranker: values.reranker,
+      ...(config && { config }),
     });
+    if (config) stderr.write(`Using ${values.config}: ${config.technique} on ${values["chunk-strategy"]} chunks of ${values["chunk-size"]} characters${values.contextual ? ", contextual" : ""}.\n`);
 
     const live = Boolean(stderr.isTTY);
     let lastPhase = null;
@@ -627,9 +809,10 @@ function runInit(values, target, { stdout, stderr, cwd }) {
  * Serves the docs over stdio until the client disconnects. stdout is reserved
  * for protocol messages, so every message goes to stderr.
  */
-async function runMcp(values, { stdin, stdout, stderr, cwd }) {
+async function runMcp(flags, { stdin, stdout, stderr, cwd }) {
   try {
-    if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge mcp --docs ./docs");
+    if (!flags.docs) throw new Error("--docs is required, e.g. npx ragforge mcp --docs ./docs");
+    const { values, config } = configFlags(flags, cwd);
     const chunking = chunkingFlags(values);
     const context = contextFlags(values, { cwd });
     if (context.contextual && (!values.provider || values.provider === "local")) {
@@ -653,6 +836,8 @@ async function runMcp(values, { stdin, stdout, stderr, cwd }) {
       embedder,
       ...chunking,
       ...context,
+      ...(config && { config }),
+      topK: toInt(values["top-k"], "top-k"),
       concurrency: toInt(values.concurrency, "concurrency"),
       stdin,
       stdout,
