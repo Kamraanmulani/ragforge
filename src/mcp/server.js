@@ -3,7 +3,7 @@
 // stdout carries protocol messages only; logs go to stderr.
 const readline = require("readline");
 const pkg = require("../../package.json");
-const { chunkDocuments } = require("../eval/chunk");
+const { chunkDocuments, checkChunking } = require("../eval/chunk");
 const { createMemoryVectorStore } = require("../eval/memoryVectorStore");
 const { createRagforge } = require("../createRagforge");
 const { mapLimit } = require("../core/limit");
@@ -34,11 +34,10 @@ function topKArg(value, fallback = DEFAULT_TOP_K) {
  * Chunks the documents and stores them. Every chunk gets a BM25 keyword entry;
  * with an embedder, also a vector. Without one, search is keyword-only and needs no key.
  */
-async function buildIndex(documents, { chunkSize, embedder, concurrency }) {
-  const chunks = chunkDocuments(documents, { size: chunkSize });
-  const vectors = embedder
-    ? await mapLimit(chunks, concurrency, async (c) => (await embedder.embed({ text: c.content, model: embedder.embeddingModel })).vector)
-    : chunks.map(() => []);
+async function buildIndex(documents, { chunkSize, chunkStrategy, chunkOverlap, embedder, concurrency }) {
+  const embed = embedder && (async (text) => (await embedder.embed({ text, model: embedder.embeddingModel })).vector);
+  const chunks = await chunkDocuments(documents, { size: chunkSize, strategy: chunkStrategy, overlap: chunkOverlap, concurrency, embed });
+  const vectors = embed ? await mapLimit(chunks, concurrency, (c) => embed(c.content)) : chunks.map(() => []);
 
   const store = createMemoryVectorStore();
   store.add(chunks.map((c, i) => ({ id: c.id, content: c.content, vector: vectors[i], metadata: { docId: c.docId } })));
@@ -143,6 +142,8 @@ function createTools(getIndex, getRagforge) {
  * @param {object} options
  * @param {Array<{id: string, content: string}>} options.documents - From loadDocuments()
  * @param {number} [options.chunkSize=800]
+ * @param {string} [options.chunkStrategy="paragraph"] - See CHUNK_STRATEGIES; semantic needs an embedder
+ * @param {number} [options.chunkOverlap=0] - fixed and sentence strategies only
  * @param {number} [options.concurrency=4] - Parallel embedding requests
  * @param {object|null} [options.embedder] - Embedding provider. Null means keyword search only.
  * @param {object|null} [options.llm] - Chat provider for `ask`. Null means no answers.
@@ -155,6 +156,8 @@ async function startMcpServer(options) {
   const {
     documents,
     chunkSize = 800,
+    chunkStrategy = "paragraph",
+    chunkOverlap = 0,
     concurrency = 4,
     llm = null,
     stdin = process.stdin,
@@ -163,12 +166,17 @@ async function startMcpServer(options) {
   } = options;
   // Like the eval: embeddings default to the chat provider, unless it has no embeddings API (anthropic)
   const embedder = options.embedder ?? (llm?.embeddingModel ? llm : null);
+  // Fail before the server starts, not on the first tool call
+  checkChunking({ strategy: chunkStrategy, size: chunkSize, overlap: chunkOverlap });
+  if (chunkStrategy === "semantic" && !embedder) {
+    throw new Error("semantic chunking needs embeddings. Pass --embeddings (e.g. --embeddings local), or pick another --chunk-strategy.");
+  }
   const log = (msg) => stderr.write(`[ragforge mcp] ${msg}\n`);
   const send = (message) => stdout.write(`${JSON.stringify(message)}\n`);
 
   // Indexing starts right away; tool calls wait for it
   let rf = null;
-  const indexing = buildIndex(documents, { chunkSize, embedder, concurrency }).then((index) => {
+  const indexing = buildIndex(documents, { chunkSize, chunkStrategy, chunkOverlap, embedder, concurrency }).then((index) => {
     if (llm) rf = createRagforge({ llm, embeddings: embedder, vectorStore: index.store, hybrid: true });
     log(`indexed ${index.chunks.length} passages from ${documents.length} document(s)${embedder ? "" : " (keyword search only)"}`);
     return index;

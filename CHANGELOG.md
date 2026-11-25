@@ -2,6 +2,22 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **Chunking strategies.** `--chunk-strategy` (`chunkStrategy` in `evaluate()`, `chunkStrategy` in `startMcpServer()`) picks how documents are split, in `eval`, `chat`, `mcp` and `label`:
+  - `paragraph`: packs whole paragraphs. The default, and unchanged, so existing chunk ids and CI baselines don't move.
+  - `fixed`: windows of characters cut at a word.
+  - `sentence`: packs whole sentences, never cutting one. Version numbers, file names and abbreviations such as "e.g." don't end a sentence.
+  - `markdown-heading`: one section per chunk, starting with its heading trail (`Setup > Windows`). `#` lines inside code fences are not headings.
+  - `semantic`: splits where the topic shifts, measured by embedding similarity between sentences. Costs one embedding call per sentence, counted in the eval's setup cost.
+  - `code`: splits source files by top-level declaration, keeping comments, docstrings and decorators with the code below them. Other documents are split by paragraph. With this strategy, `--docs` folders also yield source files (`.js`, `.ts`, `.py`, `.go`, `.rs`, `.java` and more), skipping `dist`, `build`, `vendor` and minified files.
+- `--chunk-overlap <n>` (`chunkOverlap`) repeats text between chunks, for the `fixed` and `sentence` strategies.
+- The eval result has `chunking: { strategy, size, overlap }`, and the scoreboard shows it next to the chunk count.
+- Questions replayed with `--questions-file` (and `--from-logs` labels) find their passage under any strategy: `expectedText` matching now ignores Markdown heading marks, heading-trail separators and differences in whitespace, and generated questions and labels remember a `markdown-heading` passage without its trail.
+- `chunkDocuments()` and `CHUNK_STRATEGIES` are exported. `chunkText()` takes `strategy` and `overlap`. `loadDocuments()` takes `code: true`.
+
 ## [2.3.1] - 2026-11-21
 
 ### Fixed

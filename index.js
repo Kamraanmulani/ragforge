@@ -11,7 +11,7 @@ const { DEFAULT_PRICING } = require("./src/core/pricing");
 const { rrf } = require("./src/techniques/rrf");
 const { createMemoryVectorStore } = require("./src/eval/memoryVectorStore");
 const { createBM25Index } = require("./src/eval/bm25");
-const { chunkText } = require("./src/eval/chunk");
+const { chunkText, chunkDocuments, CHUNK_STRATEGIES } = require("./src/eval/chunk");
 const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { compareEvals, formatComparison, renderMarkdownReport } = require("./src/eval/compare");
@@ -42,6 +42,8 @@ module.exports = {
   loadDocuments,
   htmlToText,
   chunkText,
+  chunkDocuments,
+  CHUNK_STRATEGIES,
   formatTable,
   renderHtmlReport,
   renderMarkdownReport,

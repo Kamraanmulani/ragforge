@@ -130,6 +130,8 @@ npx ragforge eval --docs ./docs
 | `--judge-model <name>` | same as `--model` | Chat model that grades the answers |
 | `--top-k <n>` | `5` | Results per search |
 | `--chunk-size <n>` | `800` | Max characters per chunk |
+| `--chunk-strategy <name>` | `paragraph` | How documents are split. See [Chunking](#chunking) |
+| `--chunk-overlap <n>` | `0` | Characters repeated between chunks (`fixed` and `sentence`) |
 | `--concurrency <n>` | `4` | Parallel requests |
 | `--html <file>` | | Shareable report, works in light and dark mode |
 | `--json <file>` | | Full results, usable with `auto({ from })` |
@@ -138,6 +140,30 @@ npx ragforge eval --docs ./docs
 | `--fail-on-drop <points>` | | With `--compare`: exit 1 when hit@k fell by more than this many points |
 
 With OpenAI, a 10-question run on the default techniques makes about 40 small `gpt-4o-mini` calls plus embeddings. The scoreboard shows the exact cost.
+
+### Chunking
+
+How documents are cut into chunks often matters more than the query technique. Pick a strategy with `--chunk-strategy` (or `chunkStrategy` in `evaluate()`). Every strategy keeps chunks under `--chunk-size`.
+
+| Strategy | Splits | Good for |
+|---|---|---|
+| `paragraph` (default) | Packs whole paragraphs; long ones are split at sentences | Most prose. Unchanged from earlier versions, so saved baselines still match |
+| `fixed` | Windows of characters, cut at a word. `--chunk-overlap` repeats the end of each window | A simple reference point |
+| `sentence` | Packs whole sentences and never cuts one. `--chunk-overlap` repeats the last sentences | Dense text with long paragraphs |
+| `markdown-heading` | One section per chunk, starting with its heading trail, e.g. `Setup > Windows` | Docs sites and READMEs: a passage found on its own still says what it's about |
+| `semantic` | Sentences, split where the topic shifts (embedding similarity drops) | Long pages without headings. Costs one embedding call per sentence, shown in the setup cost |
+| `code` | Source files by top-level function, class or declaration, keeping comments and decorators with them. Other files by paragraph | Code search. Also reads `.js`, `.ts`, `.py`, `.go`, `.rs`, `.java` and other source files from `--docs` folders, skipping `dist`, `build` and `vendor` |
+
+To see which works on your docs, save a run and replay its questions with another strategy:
+
+```bash
+npx ragforge eval --docs ./docs --json paragraph.json
+npx ragforge eval --docs ./docs --questions-file paragraph.json --chunk-strategy markdown-heading --compare paragraph.json
+```
+
+Replayed questions look for their passage's opening words, not its chunk id, and heading marks and whitespace are ignored, so they score fairly across strategies. A passage whose opening words get cut across two chunks counts as a miss, which can happen with `fixed` and `semantic`. Overlap repeats text between chunks, so a fact can be found in two places. That's realistic, but it makes hit rates a little easier than with no overlap.
+
+In code, `chunkText(text, { strategy, size, overlap })` splits one text and `chunkDocuments(documents, { strategy, size, overlap, embed })` splits many (semantic needs `embed`).
 
 <details>
 <summary><b>From code, or against your production vector store</b></summary>
@@ -360,7 +386,7 @@ Sources:
 (hyde · 3 LLM calls · $0.0006 · 2.4s)
 ```
 
-Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k` and `--chunk-size` options as `eval`, so `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
+Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k`, `--chunk-size` and `--chunk-strategy` options as `eval`, so `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
 
 ## Start a new RAG app
 
@@ -427,7 +453,7 @@ Options:
 - **Fully local with Ollama.** `npx ragforge mcp --docs ./docs --provider ollama --model qwen2.5` turns on `ask` and vector search with a local model (`nomic-embed-text` by default, so run `ollama pull nomic-embed-text` first).
 - **Hosted models.** `--provider openai` needs `OPENAI_API_KEY`. Add `--embeddings ollama` to keep embeddings local.
 
-The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
+The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). `--chunk-strategy markdown-heading` gives the agent passages that name their section, and `--chunk-strategy code` serves a source folder (see [Chunking](#chunking)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
 
 ## Auto-routing
 
@@ -792,14 +818,14 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 
 **Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `citations` (true), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

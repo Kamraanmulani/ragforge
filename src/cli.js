@@ -9,7 +9,7 @@ const { compareEvals, formatComparison, renderMarkdownReport } = require("./eval
 const { DEFAULT_TECHNIQUES } = require("./eval/evaluate");
 const { loadDocuments } = require("./loaders");
 const { startMcpServer } = require("./mcp/server");
-const { chunkDocuments } = require("./eval/chunk");
+const { chunkDocuments, CHUNK_STRATEGIES } = require("./eval/chunk");
 const { labelQueries, labelledQuestions, openingWords } = require("./eval/label");
 const { readTraces, uniqueQueries, sample, queryKey } = require("./core/trace");
 
@@ -60,6 +60,13 @@ Options:
   --embedding-model <name>  Embedding model (default: provider default)
   --top-k <n>               Results per search (default 5)
   --chunk-size <n>          Max characters per chunk (default 800)
+  --chunk-strategy <name>   How documents are split (default paragraph):
+                            paragraph, fixed, sentence, markdown-heading, semantic
+                            (splits where the topic shifts; one embedding call per
+                            sentence) or code (source files by declaration; also
+                            reads code files from --docs folders)
+  --chunk-overlap <n>       Characters repeated between chunks, fixed and sentence
+                            strategies only (default 0)
   --concurrency <n>         Parallel requests (default 4)
   --html <file>             Write a shareable HTML report
   --from-logs <file>        Evaluate on real queries from a JSONL trace log (written by the
@@ -81,7 +88,8 @@ Label options (label command):
   --labels <file>           Where labels are saved, added to on each run (default ${DEFAULT_LABELS_FILE})
 
 Chat options (chat command):
-  --docs, --provider, --embeddings, --model, --embedding-model, --top-k, --chunk-size
+  --docs, --provider, --embeddings, --model, --embedding-model, --top-k, --chunk-size,
+  --chunk-strategy, --chunk-overlap
                             As above. Type a question and press Enter; exit or Ctrl+D to leave.
                             Each question is answered on its own, without earlier turns.
 
@@ -93,6 +101,7 @@ Init options (init command):
 MCP options (mcp command):
   --top-k <n>               Default passages per search_docs / ask call (default 5)
   --chunk-size <n>          Max characters per passage (default 800)
+  --chunk-strategy <name>   As for eval; semantic needs --embeddings or --provider
 
 Examples:
   npx ragforge mcp --docs ./docs
@@ -103,6 +112,8 @@ Examples:
   npx ragforge eval --docs notes.md --techniques baseline,hybrid,hybrid+hyde --questions 30
   npx ragforge eval --docs ./docs --reranker cohere
   npx ragforge eval --docs ./docs --answers --techniques baseline,hybrid
+  npx ragforge eval --docs ./docs --chunk-strategy markdown-heading
+  npx ragforge eval --docs ./src --chunk-strategy code --questions 20
   npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
   npx ragforge eval --docs ./docs --questions-file golden.json --compare main.json --fail-on-drop 3
   npx ragforge label --from-logs traces.jsonl --docs ./docs
@@ -140,6 +151,37 @@ function toInt(value, name) {
 function toList(value) {
   return value === undefined ? undefined : value.split(/[\s,]+/).filter(Boolean);
 }
+
+// --chunk-overlap: characters, 0 or more
+function toCount(value, name) {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (value.trim() === "" || !Number.isInteger(n) || n < 0) throw new Error(`--${name} must be a whole number, 0 or more`);
+  return n;
+}
+
+/**
+ * chunkingFlags
+ * --chunk-size, --chunk-strategy and --chunk-overlap, checked before any document is read
+ */
+function chunkingFlags(values) {
+  const strategy = values["chunk-strategy"];
+  if (strategy !== undefined && !CHUNK_STRATEGIES.includes(strategy)) {
+    throw new Error(`--chunk-strategy must be one of: ${CHUNK_STRATEGIES.join(", ")}`);
+  }
+  return {
+    chunkSize: toInt(values["chunk-size"], "chunk-size"),
+    chunkStrategy: strategy,
+    chunkOverlap: toCount(values["chunk-overlap"], "chunk-overlap"),
+  };
+}
+
+// The code strategy also reads source files from folders
+function loadOptions(values, cwd) {
+  return { cwd, code: values["chunk-strategy"] === "code" };
+}
+
+const NO_DOCUMENTS = "No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx; source files with --chunk-strategy code)";
 
 // --fail-on-drop: points of hit rate, 0 or more (decimals allowed)
 function toPoints(value) {
@@ -215,6 +257,8 @@ async function main(argv, io = {}) {
         "judge-model": { type: "string" },
         "top-k": { type: "string" },
         "chunk-size": { type: "string" },
+        "chunk-strategy": { type: "string" },
+        "chunk-overlap": { type: "string" },
         concurrency: { type: "string" },
         html: { type: "string" },
         json: { type: "string" },
@@ -253,9 +297,10 @@ async function main(argv, io = {}) {
   const provider = values.provider ?? "openai";
   try {
     if (!values.docs && !values["questions-file"]) throw new Error("--docs is required");
+    const chunking = chunkingFlags(values);
 
-    const documents = await loadDocuments(values.docs ?? [], { cwd });
-    if (values.docs && !documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+    const documents = await loadDocuments(values.docs ?? [], loadOptions(values, cwd));
+    if (values.docs && !documents.length) throw new Error(NO_DOCUMENTS);
 
     if (values["from-logs"] && values["questions-file"]) throw new Error("Use --from-logs or --questions-file, not both");
     if (values.labels && !values["from-logs"]) throw new Error("--labels needs --from-logs <file>");
@@ -293,7 +338,7 @@ async function main(argv, io = {}) {
       questionStyles: toList(values["question-styles"]),
       topK: toInt(values["top-k"], "top-k"),
       rerankCandidates: toInt(values["rerank-candidates"], "rerank-candidates"),
-      chunkSize: toInt(values["chunk-size"], "chunk-size"),
+      ...chunking,
       concurrency: toInt(values.concurrency, "concurrency"),
       answers: values.answers,
       judgeOptions: values["judge-model"] ? { model: values["judge-model"] } : undefined,
@@ -386,9 +431,12 @@ async function runLabel(values, { stdin, stdout, stderr, cwd }) {
       if (err.code === "ENOENT") throw new Error(`--from-logs: cannot read ${values["from-logs"]}`);
       throw err;
     }
-    const documents = await loadDocuments(values.docs, { cwd });
-    const chunks = chunkDocuments(documents, { size: toInt(values["chunk-size"], "chunk-size") ?? 800 });
-    if (!chunks.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+    const chunking = chunkingFlags(values);
+    // Label shows passages from keyword search and has no embeddings to split by topic
+    if (chunking.chunkStrategy === "semantic") throw new Error("label can't use --chunk-strategy semantic, it runs without embeddings. Labels are matched by text, so they work with an eval that uses semantic chunking.");
+    const documents = await loadDocuments(values.docs, loadOptions(values, cwd));
+    const chunks = await chunkDocuments(documents, { size: chunking.chunkSize, strategy: chunking.chunkStrategy, overlap: chunking.chunkOverlap });
+    if (!chunks.length) throw new Error(NO_DOCUMENTS);
 
     const labelsName = values.labels ?? DEFAULT_LABELS_FILE;
     const labelsFile = path.resolve(cwd, labelsName);
@@ -437,8 +485,9 @@ async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
     if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge chat --docs ./docs");
     const provider = values.provider ?? "openai";
     if (provider === "local") throw new Error("chat needs a chat model, and local has none. Use --provider openai (or ollama, ...) with --embeddings local.");
-    const documents = await loadDocuments(values.docs, { cwd });
-    if (!documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+    const chunking = chunkingFlags(values);
+    const documents = await loadDocuments(values.docs, loadOptions(values, cwd));
+    if (!documents.length) throw new Error(NO_DOCUMENTS);
 
     const rf = factory({
       llm: makeProvider(provider, { chatModel: values.model }),
@@ -447,7 +496,7 @@ async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
 
     const live = Boolean(stderr.isTTY);
     const count = await indexDocuments(rf, documents, {
-      chunkSize: toInt(values["chunk-size"], "chunk-size"),
+      ...chunking,
       concurrency: toInt(values.concurrency, "concurrency"),
       onProgress: ({ done, total }) => {
         if (live) stderr.write(`\rIndexing: ${done}/${total}`);
@@ -513,8 +562,9 @@ function runInit(values, target, { stdout, stderr, cwd }) {
 async function runMcp(values, { stdin, stdout, stderr, cwd }) {
   try {
     if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge mcp --docs ./docs");
-    const documents = await loadDocuments(values.docs, { cwd });
-    if (!documents.length) throw new Error("No readable documents found in --docs (.txt, .md, .mdx, .rst, .html, .pdf, .docx)");
+    const chunking = chunkingFlags(values);
+    const documents = await loadDocuments(values.docs, loadOptions(values, cwd));
+    if (!documents.length) throw new Error(NO_DOCUMENTS);
 
     // Keyword search needs no provider. A chat provider enables `ask`; its embeddings
     // enable vector search, unless --embeddings names another provider.
@@ -529,7 +579,7 @@ async function runMcp(values, { stdin, stdout, stderr, cwd }) {
       documents,
       llm,
       embedder,
-      chunkSize: toInt(values["chunk-size"], "chunk-size"),
+      ...chunking,
       concurrency: toInt(values.concurrency, "concurrency"),
       stdin,
       stdout,

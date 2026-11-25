@@ -13,8 +13,14 @@ const usd = (x) => (x === null || x === undefined ? "cost n/a" : x === 0 ? "$0" 
  * Chunks and embeds the documents into an in-memory store and attaches it to the instance.
  * @returns {Promise<number>} number of passages indexed
  */
-async function indexDocuments(rf, documents, { chunkSize = 800, concurrency = 4, onProgress = () => {} } = {}) {
-  const chunks = chunkDocuments(documents, { size: chunkSize });
+async function indexDocuments(rf, documents, { chunkSize = 800, chunkStrategy, chunkOverlap, concurrency = 4, onProgress = () => {} } = {}) {
+  const chunks = await chunkDocuments(documents, {
+    size: chunkSize,
+    strategy: chunkStrategy,
+    overlap: chunkOverlap,
+    concurrency: concurrency * 2,
+    embed: (text) => rf.getEmbedding(text),
+  });
   if (!chunks.length) throw new Error("the documents contained no text");
   let done = 0;
   const vectors = await mapLimit(chunks, concurrency * 2, async (c) => {

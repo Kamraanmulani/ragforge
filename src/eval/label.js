@@ -3,6 +3,7 @@
 const readline = require("readline");
 const { createBM25Index } = require("./bm25");
 const { queryKey } = require("../core/trace");
+const { passageText } = require("./chunk");
 
 /**
  * openingWords
@@ -63,7 +64,8 @@ async function labelQueries({ queries, chunks, topK = 8, input, output, onLabel 
         const picked = /^\d+$/.test(reply) ? candidates[Number(reply) - 1] : null;
 
         if (picked) {
-          const label = { question: query, expectedText: openingWords(picked.content), source: picked.content, chunkId: picked.id };
+          const text = passageText(picked);
+          const label = { question: query, expectedText: openingWords(text), source: text, chunkId: picked.id };
           labels.push(label);
           onLabel(label);
           break;

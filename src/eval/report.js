@@ -61,7 +61,11 @@ function formatTable(result) {
   const line = (cells) => cells.map((c, i) => c.padEnd(widths[i])).join("   ").trimEnd();
 
   const setupParts = [];
-  if (result.chunkCount) setupParts.push(`${result.chunkCount} chunks indexed`);
+  if (result.chunkCount) {
+    const c = result.chunking;
+    const how = c ? ` (${c.strategy}, up to ${c.size} chars${c.overlap ? `, ${c.overlap} overlap` : ""})` : "";
+    setupParts.push(`${result.chunkCount} chunks indexed${how}`);
+  }
   setupParts.push(`${result.questionCount} questions`);
   setupParts.push(`setup cost ${usd(result.setup.costUSD)}`);
 

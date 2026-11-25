@@ -236,7 +236,12 @@ export interface EvaluateOptions {
   topK?: number;
   /** Candidates retrieved for rerank techniques (default 20) */
   rerankCandidates?: number;
+  /** Max characters per chunk (default 800) */
   chunkSize?: number;
+  /** How `documents` are split (default "paragraph"). "semantic" makes one embedding call per sentence */
+  chunkStrategy?: ChunkStrategy;
+  /** Characters repeated between chunks, "fixed" and "sentence" only (default 0) */
+  chunkOverlap?: number;
   concurrency?: number;
   /** Hit-rate gain over baseline needed to recommend a technique (default 0.05) */
   minImprovement?: number;
@@ -249,6 +254,43 @@ export interface EvaluateOptions {
   /** LLM options for the judge, e.g. { model: "gpt-4o" } (default: llmOptions, at temperature 0) */
   judgeOptions?: LLMOptions;
   onProgress?: (progress: { phase: "index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
+}
+
+/**
+ * How documents are split into chunks:
+ * - paragraph: packs whole paragraphs (default)
+ * - fixed: windows of characters cut at a word, with optional overlap
+ * - sentence: packs whole sentences, with optional overlap
+ * - markdown-heading: one section per chunk, starting with its heading trail ("Setup > Windows")
+ * - semantic: sentences, split where the topic shifts (needs embeddings)
+ * - code: source files split by top-level declaration; other documents by paragraph
+ */
+export type ChunkStrategy = "paragraph" | "fixed" | "sentence" | "markdown-heading" | "semantic" | "code";
+
+export interface ChunkOptions {
+  /** Max characters per chunk (default 800) */
+  size?: number;
+  strategy?: ChunkStrategy;
+  /** Characters repeated between chunks, "fixed" and "sentence" only (default 0) */
+  overlap?: number;
+}
+
+export interface ChunkDocumentsOptions extends ChunkOptions {
+  /** Embeds one text; needed for "semantic" */
+  embed?: (text: string) => Promise<number[]>;
+  /** semantic: percentile of drops in similarity between sentences that start a new chunk, 0 to 1 (default 0.9) */
+  breakpoint?: number;
+  /** semantic: parallel embedding calls (default 4) */
+  concurrency?: number;
+}
+
+export interface Chunk {
+  /** "<docId>#<n>", counting from 1 */
+  id: string;
+  docId: string;
+  content: string;
+  /** markdown-heading: the heading trail that `content` starts with, e.g. "Setup > Windows" */
+  heading?: string;
 }
 
 /** Answer-quality scores from 0 to 1. null when a metric could not be scored */
@@ -304,6 +346,8 @@ export interface EvalResult {
   topK: number;
   questionCount: number;
   chunkCount: number | null;
+  /** How the documents were split. null when evaluating your own vector store */
+  chunking?: { strategy: ChunkStrategy; size: number; overlap: number } | null;
   techniques: string[];
   provider: { llm: string; chatModel: string; embeddings: string; embeddingModel: string };
   /** Usage for indexing and question generation */
@@ -455,13 +499,26 @@ export function createMemoryVectorStore(): MemoryVectorStore;
 /** Zero-dependency BM25 keyword index, e.g. to add searchText() to your own store */
 export function createBM25Index(options?: { k1?: number; b?: number }): BM25Index;
 
-export function chunkText(text: string, options?: { size?: number }): string[];
+/** Splits one text. Every strategy but "semantic", which needs chunkDocuments() with `embed` */
+export function chunkText(text: string, options?: ChunkOptions): string[];
+
+/** Splits documents into chunks with ids "<docId>#<n>". Repeated document ids get a "~2" suffix */
+export function chunkDocuments(
+  documents: Array<string | { id?: string; content: string }>,
+  options?: ChunkDocumentsOptions
+): Promise<Chunk[]>;
+
+export const CHUNK_STRATEGIES: ChunkStrategy[];
 
 export interface McpServerOptions {
   /** Documents from loadDocuments() */
   documents: Array<{ id: string; content: string }>;
   /** Max characters per passage (default 800) */
   chunkSize?: number;
+  /** How documents are split (default "paragraph"). "semantic" needs an embedder */
+  chunkStrategy?: ChunkStrategy;
+  /** Characters repeated between passages, "fixed" and "sentence" only (default 0) */
+  chunkOverlap?: number;
   /** Parallel embedding requests while indexing (default 4) */
   concurrency?: number;
   /** Embedding provider for vector search. Omit for keyword search only (no key). */
@@ -489,7 +546,13 @@ export interface LoadedDocument {
  */
 export function loadDocuments(
   sources: string | string[],
-  options?: { cwd?: string; concurrency?: number; fetch?: typeof fetch }
+  options?: {
+    cwd?: string;
+    concurrency?: number;
+    fetch?: typeof fetch;
+    /** Also read source code files from folders, for the "code" chunking strategy */
+    code?: boolean;
+  }
 ): Promise<LoadedDocument[]>;
 
 /** Readable text from an HTML page, keeping headings, paragraphs and list items */

@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { mapLimit } = require("../core/limit");
+const { CODE_EXTENSIONS, CODE_SKIP_DIRS } = require("../core/fileTypes");
 
 const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".mdx", ".rst"]);
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);
@@ -99,16 +100,24 @@ async function parseDocument(data, type) {
   return text;
 }
 
-function collectFiles(target) {
+/**
+ * collectFiles
+ * A file as given, or the supported files in a folder, recursively. Hidden
+ * entries and node_modules are skipped. With `code`, source files are read
+ * too, and build output folders (dist, build, vendor, ...) and minified files are skipped.
+ */
+function collectFiles(target, { code = false } = {}) {
   const stat = fs.statSync(target);
   if (stat.isFile()) return [target];
   return fs
     .readdirSync(target, { withFileTypes: true })
-    .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules")
+    .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules" && !(code && e.isDirectory() && CODE_SKIP_DIRS.has(e.name)))
     .flatMap((e) => {
       const full = path.join(target, e.name);
-      if (e.isDirectory()) return collectFiles(full);
-      return SUPPORTED_EXTENSIONS.has(path.extname(e.name).toLowerCase()) ? [full] : [];
+      if (e.isDirectory()) return collectFiles(full, { code });
+      const ext = path.extname(e.name).toLowerCase();
+      if (SUPPORTED_EXTENSIONS.has(ext)) return [full];
+      return code && CODE_EXTENSIONS.has(ext) && !/\.min\.[cm]?js$/i.test(e.name) ? [full] : [];
     });
 }
 
@@ -135,11 +144,12 @@ async function loadURL(url, fetchImpl) {
  * @param {object} [options]
  * @param {string} [options.cwd=process.cwd()] - Base for relative paths
  * @param {number} [options.concurrency=4] - Files parsed at once
+ * @param {boolean} [options.code=false] - Also read source code files from folders (for the code chunking strategy)
  * @param {function} [options.fetch] - Custom fetch for URLs
  * @returns {Promise<Array<{id: string, content: string, metadata: object}>>}
  */
 async function loadDocuments(sources, options = {}) {
-  const { cwd = process.cwd(), concurrency = 4, fetch: fetchImpl = globalThis.fetch } = options;
+  const { cwd = process.cwd(), concurrency = 4, fetch: fetchImpl = globalThis.fetch, code = false } = options;
 
   const jobs = [];
   for (const source of [sources].flat()) {
@@ -149,7 +159,7 @@ async function loadDocuments(sources, options = {}) {
     }
     const root = path.resolve(cwd, source);
     const base = path.dirname(root);
-    for (const file of collectFiles(root)) {
+    for (const file of collectFiles(root, { code })) {
       jobs.push(async () => {
         const ext = path.extname(file).toLowerCase();
         let content;

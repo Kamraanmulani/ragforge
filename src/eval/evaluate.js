@@ -8,7 +8,7 @@ const { hypotheticalDocument } = require("../techniques/hyde");
 const { cot } = require("../techniques/cot");
 const { generalQuestion } = require("../techniques/stepback");
 const { subQuestions } = require("../techniques/fanout");
-const { chunkDocuments } = require("./chunk");
+const { chunkDocuments, checkChunking, passageText } = require("./chunk");
 const { createMemoryVectorStore } = require("./memoryVectorStore");
 const { judgeAnswer, summarizeAnswers, JUDGE_VERSION } = require("./judge");
 
@@ -111,7 +111,7 @@ async function generateQuestions(ctx, chunks, count, llmOptions, concurrency, on
       const question = cleanQuestion(await ctx.chat(questionPrompt(style, chunk), { temperature: 0.3, max_tokens: 100, ...llmOptions }));
       if (question && !VAGUE_REFERENCE.test(question)) {
         onProgress({ phase: "questions", done: ++done, total: n });
-        return { question, style, expectedId: chunk.id, source: chunk.content };
+        return { question, style, expectedId: chunk.id, source: passageText(chunk) };
       }
       chunk = spares.shift();
     }
@@ -134,9 +134,24 @@ function resultKey(item) {
   return item && typeof item === "object" && item.id != null ? String(item.id) : extractText(item);
 }
 
+/**
+ * matchText
+ * Text compared for expectedText matches: lowercased, whitespace collapsed, and
+ * without Markdown heading marks ("## ") or heading-trail separators (" > "), so a
+ * passage still matches after it moved to a chunk made by another strategy.
+ */
+function matchText(text) {
+  return String(text)
+    .toLowerCase()
+    .replace(/(^|\s)#{1,6}(?=\s)/g, " ")
+    .replace(/\s>\s/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isMatch(item, key, q) {
   if (q.expectedId != null) return key === String(q.expectedId);
-  return extractText(item).toLowerCase().includes(String(q.expectedText).toLowerCase());
+  return matchText(extractText(item)).includes(matchText(q.expectedText));
 }
 
 function mean(values) {
@@ -225,6 +240,8 @@ function recommend(ranked, topK, minImprovement) {
  * @param {number} [options.topK=5]
  * @param {number} [options.rerankCandidates=20] - Candidates retrieved for rerank techniques
  * @param {number} [options.chunkSize=800]
+ * @param {string} [options.chunkStrategy="paragraph"] - paragraph, fixed, sentence, markdown-heading, semantic or code
+ * @param {number} [options.chunkOverlap=0] - Characters repeated between chunks (fixed and sentence)
  * @param {number} [options.concurrency=4]
  * @param {number} [options.minImprovement=0.05] - Hit-rate gain needed to recommend over baseline
  * @param {object} [options.llmOptions] - LLM options for techniques, question generation and answers
@@ -241,6 +258,8 @@ async function evaluate(config, options = {}) {
     topK = 5,
     rerankCandidates = 20,
     chunkSize = 800,
+    chunkStrategy = "paragraph",
+    chunkOverlap = 0,
     concurrency = 4,
     minImprovement = 0.05,
     llmOptions = {},
@@ -257,6 +276,7 @@ async function evaluate(config, options = {}) {
 
   // Validate everything before spending any API calls
   techniques.forEach(parseTechnique);
+  const chunking = checkChunking({ strategy: chunkStrategy, size: chunkSize, overlap: chunkOverlap });
   if (!textSearch && techniques.some(usesHybrid)) {
     throw new Error("[ragforge] evaluate: hybrid techniques need keyword search. Pass `documents`, or add `searchText(text, topK)` to your vector store.");
   }
@@ -289,7 +309,8 @@ async function evaluate(config, options = {}) {
   let store;
   let chunks = [];
   if (hasDocuments) {
-    chunks = chunkDocuments(documents, { size: chunkSize });
+    // Semantic chunking embeds every sentence; that usage counts toward the setup cost
+    chunks = await chunkDocuments(documents, { ...chunking, concurrency: concurrency * 2, embed: (text) => setupCtx.embed(text) });
     if (!chunks.length) throw new Error("[ragforge] evaluate: documents contained no text");
     store = createMemoryVectorStore();
     let done = 0;
@@ -392,6 +413,8 @@ async function evaluate(config, options = {}) {
     topK,
     questionCount: questions.length,
     chunkCount: chunks.length || null,
+    // How the documents were split; null when evaluating your own vector store
+    chunking: hasDocuments ? chunking : null,
     techniques,
     provider: {
       llm: config.llm.name,
@@ -439,4 +462,4 @@ async function evaluate(config, options = {}) {
   };
 }
 
-module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions, recommend, rankRows };
+module.exports = { evaluate, matchText, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions, recommend, rankRows };
