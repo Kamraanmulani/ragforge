@@ -40,6 +40,18 @@ function answerNote(result) {
  * formatTable
  * Plain-text scoreboard for terminals
  */
+/**
+ * contextNote
+ * One line on what contextual retrieval cost to index: paid once, not per query
+ */
+function contextNote(c) {
+  const parts = [`${c.contextualized} of ${c.chunks} chunks given context by ${c.model}`];
+  if (c.cached) parts.push(`${c.cached} from cache`);
+  if (c.failed) parts.push(`${c.failed} failed and were indexed without context`);
+  parts.push(`one-time index cost ${usd(c.usage.costUSD)}`);
+  return `Contextual: ${parts.join(", ")}`;
+}
+
 function formatTable(result) {
   const { topK, provider } = result;
   const header = ["technique", `hit@${topK}`, "MRR", ...answerHeaders(result), "latency", "cost/query", "LLM calls", "errors"];
@@ -79,6 +91,7 @@ function formatTable(result) {
     `★ Recommended: ${result.recommendation.technique}`,
     `  ${result.recommendation.reason}`,
     `Setup: ${setupParts.join(", ")}`,
+    ...(result.contextual ? [contextNote(result.contextual)] : []),
     ...(result.answers ? [answerNote(result)] : []),
   ].join("\n");
 }
@@ -199,6 +212,7 @@ code { font-size: .85em; }
     <span>LLM: ${esc(provider.llm)} ${esc(provider.chatModel)}</span>
     <span>Embeddings: ${esc(provider.embeddingModel)}</span>
     <span>Setup cost: ${usd(result.setup.costUSD)}</span>
+    ${result.contextual ? `<span>Contextual index cost: ${usd(result.contextual.usage.costUSD)} (one-time)</span>` : ""}
   </div>
 </div>
 
@@ -227,4 +241,4 @@ ${questionRows}
 `;
 }
 
-module.exports = { formatTable, renderHtmlReport, answerHeaders, answerCells, answerNote };
+module.exports = { formatTable, renderHtmlReport, answerHeaders, answerCells, answerNote, contextNote };

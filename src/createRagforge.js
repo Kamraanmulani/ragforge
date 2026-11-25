@@ -15,7 +15,8 @@ const { rrf } = require("./techniques/rrf");
 const { translate } = require("./pipeline/queryTranslator");
 const { ragPipeline } = require("./pipeline/ragPipeline");
 const { evaluate } = require("./eval/evaluate");
-const { route, pipelineTechniques, usesHybrid, usesRerank } = require("./router/route");
+const { route, pipelineTechniques, usesHybrid, usesRerank, usesContextual } = require("./router/route");
+const { contextualize, estimateContextCost } = require("./indexing/contextual");
 
 /**
  * createRagforge
@@ -119,12 +120,25 @@ function createRagforge(options = {}) {
           rerank = false;
           chosen.reason += " Reranking was skipped because no reranker is configured.";
         }
+        // Contextual retrieval happens when the store is indexed; nothing changes at query time
+        if (usesContextual(chosen.technique)) {
+          chosen.reason += " Contextual retrieval applies to how the vector store is indexed: build it from rf.contextualize() chunks.";
+        }
         const result = await ragPipeline(ctx, query, { ...opts, hybrid, rerank, techniques: pipelineTechniques(chosen.technique) });
         return withStats(ctx, { ...result, route: chosen }, opts, "auto");
       }, opts),
 
     // Benchmarks retrieval techniques; see src/eval/evaluate.js for options
     evaluate: (opts = {}) => evaluate(config, opts),
+
+    // Contextual retrieval: adds an LLM-written context line to each chunk, for indexing.
+    // See src/indexing/contextual.js for options
+    contextualize: async (chunks, documents, opts = {}) => {
+      const ctx = createCallContext(config);
+      const result = await contextualize(ctx, config, chunks, documents, opts);
+      return { ...result, stats: ctx.tracker.snapshot() };
+    },
+    estimateContextCost: (chunks, documents, opts = {}) => estimateContextCost(config, chunks, documents, opts),
 
     callLLM: (prompt, opts = {}) => run((ctx) => ctx.chat(prompt, opts), opts),
     getEmbedding: (text, opts = {}) => run((ctx) => ctx.embed(text, opts.model), opts),

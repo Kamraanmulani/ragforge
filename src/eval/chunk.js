@@ -390,6 +390,26 @@ function chunkText(text, options = {}) {
 }
 
 /**
+ * normalizeDocuments
+ * The document ids chunks get ("doc3" for a plain string), with their text.
+ * Repeated ids (e.g. two README.md files) would make chunk ids ambiguous and
+ * let eval count a hit on the wrong document, so they get a "~2" suffix.
+ * @returns {Array<{ docId: string, content: string, isCode: boolean }>}
+ */
+function normalizeDocuments(documents) {
+  const seen = new Map();
+  return documents.map((doc, d) => {
+    const named = typeof doc === "object" && doc !== null && doc.id != null;
+    const baseId = named ? String(doc.id) : `doc${d + 1}`;
+    const count = (seen.get(baseId) ?? 0) + 1;
+    seen.set(baseId, count);
+    const docId = count === 1 ? baseId : `${baseId}~${count}`;
+    const content = String((typeof doc === "string" ? doc : doc?.content) ?? "");
+    return { docId, content, isCode: !named || isCodeFile(baseId) };
+  });
+}
+
+/**
  * chunkDocuments
  * Chunk ids are "<document id>#<n>", counting from 1.
  * With the `code` strategy, documents whose id has a source code extension
@@ -409,19 +429,7 @@ async function chunkDocuments(documents, options = {}) {
   if (opts.strategy === "semantic" && typeof options.embed !== "function") {
     throw new Error("[ragforge] semantic chunking needs embeddings: pass `embed: (text) => vector`");
   }
-  // Repeated ids (e.g. two README.md files) would make chunk ids ambiguous
-  // and let eval count a hit on the wrong document, so suffix them
-  const seen = new Map();
-  const docs = documents.map((doc, d) => {
-    const named = typeof doc === "object" && doc !== null && doc.id != null;
-    const baseId = named ? String(doc.id) : `doc${d + 1}`;
-    const count = (seen.get(baseId) ?? 0) + 1;
-    seen.set(baseId, count);
-    const docId = count === 1 ? baseId : `${baseId}~${count}`;
-    const content = String((typeof doc === "string" ? doc : doc?.content) ?? "");
-    return { docId, content, isCode: !named || isCodeFile(baseId) };
-  });
-
+  const docs = normalizeDocuments(documents);
   const pieces = [];
   for (const doc of docs) {
     if (opts.strategy === "semantic") {
@@ -448,6 +456,7 @@ module.exports = {
   chunkDocuments,
   checkChunking,
   passageText,
+  normalizeDocuments,
   splitSentences,
   markdownSections,
   codeUnits,

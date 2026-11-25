@@ -5,7 +5,7 @@
 // created default instance (OpenAI, key from OPENAI_API_KEY).
 const { createRagforge } = require("./src/createRagforge");
 const { createOpenAIProvider, createOllamaProvider, createAnthropicProvider, createGeminiProvider, createMistralProvider, createCohereProvider, createLocalProvider } = require("./src/providers");
-const { createMemoryCache } = require("./src/core/cache");
+const { createMemoryCache, createFileCache } = require("./src/core/cache");
 const { createLLMReranker, createCohereReranker, createJinaReranker } = require("./src/rerankers");
 const { DEFAULT_PRICING } = require("./src/core/pricing");
 const { rrf } = require("./src/techniques/rrf");
@@ -34,6 +34,7 @@ module.exports = {
   createCohereProvider,
   createLocalProvider,
   createMemoryCache,
+  createFileCache,
   createLLMReranker,
   createCohereReranker,
   createJinaReranker,

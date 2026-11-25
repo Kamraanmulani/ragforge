@@ -211,7 +211,7 @@ export interface PipelineResult {
   stats: Stats;
 }
 
-export type EvalTechnique = "baseline" | "hybrid" | "rerank" | Technique | (string & {});
+export type EvalTechnique = "baseline" | "hybrid" | "rerank" | "contextual" | Technique | (string & {});
 
 export interface EvalQuestion {
   question: string;
@@ -253,7 +253,60 @@ export interface EvaluateOptions {
   answers?: boolean;
   /** LLM options for the judge, e.g. { model: "gpt-4o" } (default: llmOptions, at temperature 0) */
   judgeOptions?: LLMOptions;
-  onProgress?: (progress: { phase: "index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
+  /** Add "contextual" and "contextual+hybrid" to the default techniques */
+  contextual?: boolean;
+  /** For contextual techniques: the model, cache, budget and document window for context lines */
+  contextOptions?: ContextOptions;
+  onProgress?: (progress: { phase: "index" | "context" | "context-index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
+}
+
+export interface ContextOptions {
+  /** Chat model that writes the context lines (default: the instance's) */
+  model?: string;
+  llmOptions?: LLMOptions;
+  /** Keeps context lines between runs, e.g. createFileCache(".ragforge/context-cache.json") */
+  cache?: Cache;
+  /** Refuse to start when the estimated cost is higher (USD) */
+  budgetUSD?: number;
+  /** Document text shown with each chunk; longer documents are cut to a window around it (default 24000) */
+  maxDocumentChars?: number;
+  /** Parallel LLM calls (default 4) */
+  concurrency?: number;
+  /** Called with the estimate before any LLM call */
+  onEstimate?: (estimate: ContextEstimate) => void;
+  onProgress?: (progress: { phase: "context"; done: number; total: number }) => void;
+}
+
+export interface ContextEstimate {
+  chunks: number;
+  /** Chunks whose context line is already in the cache */
+  cached: number;
+  /** LLM calls still to make */
+  calls: number;
+  /** Estimated from characters, about 4 per token */
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+  /** null when the model has no known price (add it with `pricing`); 0 for free providers */
+  costUSD: number | null;
+}
+
+export interface ContextualChunk extends Chunk {
+  /** The LLM-written line that places the chunk in its document ("" when its call failed) */
+  context: string;
+  /** context + chunk: the text to embed and keyword-index. Show `content` to users */
+  indexText: string;
+}
+
+export interface ContextualizeResult {
+  chunks: ContextualChunk[];
+  estimate: ContextEstimate;
+  /** Context lines taken from the cache */
+  cached: number;
+  /** Chunks whose call failed; they are indexed without context */
+  failed: number;
+  errors: Array<{ id: string; error: string }>;
+  stats: Stats;
 }
 
 /**
@@ -348,6 +401,17 @@ export interface EvalResult {
   chunkCount: number | null;
   /** How the documents were split. null when evaluating your own vector store */
   chunking?: { strategy: ChunkStrategy; size: number; overlap: number } | null;
+  /** Present when contextual techniques ran: what writing and indexing the context lines cost, once */
+  contextual?: {
+    model: string;
+    chunks: number;
+    /** Chunks that got a context line */
+    contextualized: number;
+    cached: number;
+    failed: number;
+    estimate: ContextEstimate;
+    usage: Stats;
+  };
   techniques: string[];
   provider: { llm: string; chatModel: string; embeddings: string; embeddingModel: string };
   /** Usage for indexing and question generation */
@@ -450,6 +514,13 @@ export interface Ragforge {
   auto(query: string, options?: AutoOptions): Promise<AutoResult>;
   /** Benchmark retrieval techniques on your data and get a recommendation */
   evaluate(options: EvaluateOptions): Promise<EvalResult>;
+  /**
+   * Contextual retrieval: an LLM writes a line placing each chunk in its document.
+   * Embed and keyword-index `indexText`; show `content`. Pass the documents the chunks came from.
+   */
+  contextualize(chunks: Chunk[], documents: Array<string | { id?: string; content: string }>, options?: ContextOptions): Promise<ContextualizeResult>;
+  /** What contextualize() would cost, without calling the LLM */
+  estimateContextCost(chunks: Chunk[], documents: Array<string | { id?: string; content: string }>, options?: ContextOptions): Promise<ContextEstimate>;
   hyde(query: string, options?: CallOptions): Promise<string>;
   cot(query: string, options?: CallOptions): Promise<CotResult>;
   stepback(query: string, options?: CallOptions): Promise<StepbackResult>;
@@ -490,6 +561,17 @@ export function createOllamaProvider(options?: {
 
 export function createMemoryCache(options?: { maxEntries?: number }): MemoryCache;
 
+export interface FileCache extends Cache {
+  readonly file: string;
+  /** Save pending writes now (they are also saved shortly after each write, and at exit) */
+  flush(): Promise<void>;
+  clear(): void;
+  readonly size: number;
+}
+
+/** A cache kept in a JSON file, so entries survive between runs */
+export function createFileCache(file: string, options?: { flushMs?: number }): FileCache;
+
 export function createLLMReranker(options?: { maxChars?: number; llmOptions?: LLMOptions }): Reranker;
 export function createCohereReranker(options?: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }): Reranker;
 export function createJinaReranker(options?: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }): Reranker;
@@ -519,6 +601,9 @@ export interface McpServerOptions {
   chunkStrategy?: ChunkStrategy;
   /** Characters repeated between passages, "fixed" and "sentence" only (default 0) */
   chunkOverlap?: number;
+  /** Give each passage an LLM-written context line before indexing (needs llm) */
+  contextual?: boolean;
+  contextOptions?: ContextOptions;
   /** Parallel embedding requests while indexing (default 4) */
   concurrency?: number;
   /** Embedding provider for vector search. Omit for keyword search only (no key). */

@@ -11,6 +11,7 @@ const { subQuestions } = require("../techniques/fanout");
 const { chunkDocuments, checkChunking, passageText } = require("./chunk");
 const { createMemoryVectorStore } = require("./memoryVectorStore");
 const { judgeAnswer, summarizeAnswers, JUDGE_VERSION } = require("./judge");
+const { contextualize } = require("../indexing/contextual");
 
 const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 
@@ -18,10 +19,12 @@ const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 // Multiple texts are fused with RRF, the same way the pipeline does it.
 // "hybrid" also runs a keyword (BM25) search for the original question.
 // "rerank" retrieves more candidates and lets the reranker pick the top k.
+// "contextual" searches a second index whose chunks carry an LLM-written context line.
 const QUERY_BUILDERS = {
   baseline: async (ctx, q) => [q],
   hybrid: async (ctx, q) => [q],
   rerank: async (ctx, q) => [q],
+  contextual: async (ctx, q) => [q],
   hyde: async (ctx, q, o) => [await hypotheticalDocument(ctx, q, o)],
   cot: async (ctx, q, o) => [(await cot(ctx, q, o)).refinedQuery],
   stepback: async (ctx, q, o) => [q, await generalQuestion(ctx, q, o)],
@@ -49,9 +52,14 @@ function usesRerank(technique) {
   return parseTechnique(technique).includes("rerank");
 }
 
-// Costs more than plain search: extra LLM calls or a reranker call
+function usesContextual(technique) {
+  return parseTechnique(technique).includes("contextual");
+}
+
+// Costs more than plain search: extra LLM calls, a reranker call, or (contextual)
+// an LLM call per chunk at index time
 function addsCost(row, baseline) {
-  return row.avgLlmCalls > baseline.avgLlmCalls || usesRerank(row.technique);
+  return row.avgLlmCalls > baseline.avgLlmCalls || usesRerank(row.technique) || usesContextual(row.technique);
 }
 
 async function buildQueries(ctx, technique, question, llmOptions) {
@@ -248,6 +256,9 @@ function recommend(ranked, topK, minImprovement) {
  * @param {boolean} [options.answers=false] - Also write an answer from each technique's passages and
  *   grade it with an LLM judge: faithfulness, answer relevance, context recall, citation accuracy
  * @param {object} [options.judgeOptions] - LLM options for the judge, e.g. { model } (default: llmOptions at temperature 0)
+ * @param {boolean} [options.contextual=false] - Add "contextual" and "contextual+hybrid" to the default techniques
+ * @param {object} [options.contextOptions] - For contextual techniques: { model, cache, budgetUSD,
+ *   maxDocumentChars, llmOptions, onEstimate }, see src/indexing/contextual.js
  * @param {function} [options.onProgress] - ({ phase, done, total }) => void
  */
 async function evaluate(config, options = {}) {
@@ -265,20 +276,35 @@ async function evaluate(config, options = {}) {
     llmOptions = {},
     answers = false,
     judgeOptions = {},
+    contextOptions = {},
     onProgress = () => {},
   } = options;
 
   const hasDocuments = Boolean(documents && documents.length);
   // Hybrid needs keyword search: the in-memory store has it, your own store needs searchText()
   const textSearch = hasDocuments || typeof config.vectorStore?.searchText === "function";
-  const defaults = config.reranker ? [...DEFAULT_TECHNIQUES, "rerank", "hybrid+rerank"] : DEFAULT_TECHNIQUES;
+  const defaults = [
+    ...DEFAULT_TECHNIQUES,
+    ...(config.reranker ? ["rerank", "hybrid+rerank"] : []),
+    ...(options.contextual ? ["contextual", "contextual+hybrid"] : []),
+  ];
   const techniques = options.techniques ?? defaults.filter((t) => textSearch || !usesHybrid(t));
+  if (options.contextual && options.techniques && !options.techniques.some(usesContextual)) {
+    throw new Error('[ragforge] evaluate: `contextual` adds contextual techniques to the defaults, but `techniques` lists none. Add e.g. "contextual" or "contextual+hybrid" to techniques.');
+  }
 
   // Validate everything before spending any API calls
   techniques.forEach(parseTechnique);
   const chunking = checkChunking({ strategy: chunkStrategy, size: chunkSize, overlap: chunkOverlap });
   if (!textSearch && techniques.some(usesHybrid)) {
     throw new Error("[ragforge] evaluate: hybrid techniques need keyword search. Pass `documents`, or add `searchText(text, topK)` to your vector store.");
+  }
+  const contextual = techniques.some(usesContextual);
+  if (contextual && !hasDocuments) {
+    throw new Error("[ragforge] evaluate: contextual techniques index `documents` a second time with context lines, so they need `documents`. For your own vector store, index it with rf.contextualize().");
+  }
+  if (contextual && config.llm.chatModel === null && !contextOptions.model) {
+    throw new Error(`[ragforge] evaluate: contextual techniques need a chat model to write context lines, and the ${config.llm.name} provider has none.`);
   }
   if (!config.reranker && techniques.some(usesRerank)) {
     throw new Error('[ragforge] evaluate: rerank techniques need a reranker, e.g. createRagforge({ reranker: "cohere" })');
@@ -308,10 +334,34 @@ async function evaluate(config, options = {}) {
   // 1. Corpus: index documents in memory, or use the instance's vector store
   let store;
   let chunks = [];
+  let contextStore = null;
+  let contextRun = null;
+  // Context lines and their embeddings are a one-time index cost, reported apart from setup
+  const contextTracker = createTracker(config.pricing);
   if (hasDocuments) {
     // Semantic chunking embeds every sentence; that usage counts toward the setup cost
     chunks = await chunkDocuments(documents, { ...chunking, concurrency: concurrency * 2, embed: (text) => setupCtx.embed(text) });
     if (!chunks.length) throw new Error("[ragforge] evaluate: documents contained no text");
+
+    // Contextual: write the context lines first, so the estimate and budget check come before most spending
+    if (contextual) {
+      const contextCtx = createCallContext(config, contextTracker);
+      contextRun = await contextualize(contextCtx, config, chunks, documents, {
+        llmOptions,
+        ...contextOptions,
+        concurrency,
+        onProgress,
+      });
+      contextStore = createMemoryVectorStore();
+      let embedded = 0;
+      const contextVectors = await mapLimit(contextRun.chunks, concurrency * 2, async (c) => {
+        const v = await contextCtx.embed(c.indexText);
+        onProgress({ phase: "context-index", done: ++embedded, total: contextRun.chunks.length });
+        return v;
+      });
+      contextStore.add(contextRun.chunks.map((c, i) => ({ id: c.id, content: c.content, indexText: c.indexText, vector: contextVectors[i] })));
+    }
+
     store = createMemoryVectorStore();
     let done = 0;
     const vectors = await mapLimit(chunks, concurrency * 2, async (c) => {
@@ -336,7 +386,8 @@ async function evaluate(config, options = {}) {
   const tasks = questions.flatMap((q, qi) => techniques.map((technique) => ({ q, qi, technique })));
   let done = 0;
   const runs = await mapLimit(tasks, concurrency, async ({ q, qi, technique }) => {
-    const ctx = createCallContext({ ...config, vectorStore: store });
+    const searched = usesContextual(technique) ? contextStore : store;
+    const ctx = createCallContext({ ...config, vectorStore: searched });
     const run = { technique, questionIndex: qi, rank: 0, queries: [], retrieved: [] };
     try {
       run.queries = await buildQueries(ctx, technique, q.question, llmOptions);
@@ -350,7 +401,7 @@ async function evaluate(config, options = {}) {
       const rerank = usesRerank(technique);
       const depth = rerank ? Math.max(rerankCandidates, topK) : topK;
       const searches = run.queries.map(async (text) => toKeys(await ctx.queryVectors(await ctx.embed(text), depth)));
-      if (usesHybrid(technique)) searches.push(store.searchText(q.question, depth).then((results) => toKeys(results ?? [])));
+      if (usesHybrid(technique)) searches.push(searched.searchText(q.question, depth).then((results) => toKeys(results ?? [])));
       const lists = await Promise.all(searches);
       let ranked = (lists.length === 1 ? lists[0] : rrf(lists)).slice(0, depth);
       if (rerank) {
@@ -423,6 +474,19 @@ async function evaluate(config, options = {}) {
       embeddingModel: config.embedder.embeddingModel,
     },
     setup: setupTracker.snapshot(),
+    ...(contextRun && {
+      contextual: {
+        model: contextRun.estimate.model,
+        chunks: contextRun.chunks.length,
+        // Chunks that got a context line (the rest are indexed as they are)
+        contextualized: contextRun.chunks.filter((c) => c.context).length,
+        cached: contextRun.cached,
+        failed: contextRun.failed,
+        estimate: contextRun.estimate,
+        // Context lines plus embedding the contextual chunks: a one-time index cost
+        usage: contextTracker.snapshot(),
+      },
+    }),
     results: rows,
     ranking: ranked.map((r) => r.technique),
     best: ranked[0].technique,
@@ -462,4 +526,4 @@ async function evaluate(config, options = {}) {
   };
 }
 
-module.exports = { evaluate, matchText, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions, recommend, rankRows };
+module.exports = { evaluate, matchText, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, usesContextual, addsCost, generateQuestions, recommend, rankRows };

@@ -11,10 +11,13 @@ const usd = (x) => (x === null || x === undefined ? "cost n/a" : x === 0 ? "$0" 
 /**
  * indexDocuments
  * Chunks and embeds the documents into an in-memory store and attaches it to the instance.
- * @returns {Promise<number>} number of passages indexed
+ * With `contextual`, each chunk first gets an LLM-written context line, which is
+ * embedded and keyword-indexed with it (see rf.contextualize).
+ * @returns {Promise<{ count: number, contextual: object|null }>} passages indexed, and
+ *   the contextualize() result (estimate, cached, failed, stats) when contextual
  */
-async function indexDocuments(rf, documents, { chunkSize = 800, chunkStrategy, chunkOverlap, concurrency = 4, onProgress = () => {} } = {}) {
-  const chunks = await chunkDocuments(documents, {
+async function indexDocuments(rf, documents, { chunkSize = 800, chunkStrategy, chunkOverlap, concurrency = 4, contextual = false, contextOptions = {}, onProgress = () => {} } = {}) {
+  let chunks = await chunkDocuments(documents, {
     size: chunkSize,
     strategy: chunkStrategy,
     overlap: chunkOverlap,
@@ -22,16 +25,25 @@ async function indexDocuments(rf, documents, { chunkSize = 800, chunkStrategy, c
     embed: (text) => rf.getEmbedding(text),
   });
   if (!chunks.length) throw new Error("the documents contained no text");
+  let context = null;
+  if (contextual) {
+    context = await rf.contextualize(chunks, documents, {
+      concurrency,
+      ...contextOptions,
+      onProgress: ({ done, total }) => onProgress({ phase: "context", done, total }),
+    });
+    chunks = context.chunks;
+  }
   let done = 0;
   const vectors = await mapLimit(chunks, concurrency * 2, async (c) => {
-    const vector = await rf.getEmbedding(c.content);
-    onProgress({ done: ++done, total: chunks.length });
+    const vector = await rf.getEmbedding(c.indexText ?? c.content);
+    onProgress({ phase: "index", done: ++done, total: chunks.length });
     return vector;
   });
   const store = createMemoryVectorStore();
-  store.add(chunks.map((c, i) => ({ id: c.id, content: c.content, vector: vectors[i], metadata: { docId: c.docId } })));
+  store.add(chunks.map((c, i) => ({ id: c.id, content: c.content, indexText: c.indexText, vector: vectors[i], metadata: { docId: c.docId } })));
   rf.setVectorStore(store);
-  return chunks.length;
+  return { count: chunks.length, contextual: context };
 }
 
 /**

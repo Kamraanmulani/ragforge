@@ -8,6 +8,7 @@ const { createMemoryVectorStore } = require("../eval/memoryVectorStore");
 const { createRagforge } = require("../createRagforge");
 const { mapLimit } = require("../core/limit");
 const { rrf } = require("../techniques/rrf");
+const { estimateLine, doneLine } = require("../indexing/contextual");
 
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_TOP_K = 5;
@@ -34,14 +35,20 @@ function topKArg(value, fallback = DEFAULT_TOP_K) {
  * Chunks the documents and stores them. Every chunk gets a BM25 keyword entry;
  * with an embedder, also a vector. Without one, search is keyword-only and needs no key.
  */
-async function buildIndex(documents, { chunkSize, chunkStrategy, chunkOverlap, embedder, concurrency }) {
+async function buildIndex(documents, { chunkSize, chunkStrategy, chunkOverlap, embedder, concurrency, contextualizer = null, contextOptions = {} }) {
   const embed = embedder && (async (text) => (await embedder.embed({ text, model: embedder.embeddingModel })).vector);
-  const chunks = await chunkDocuments(documents, { size: chunkSize, strategy: chunkStrategy, overlap: chunkOverlap, concurrency, embed });
-  const vectors = embed ? await mapLimit(chunks, concurrency, (c) => embed(c.content)) : chunks.map(() => []);
+  let chunks = await chunkDocuments(documents, { size: chunkSize, strategy: chunkStrategy, overlap: chunkOverlap, concurrency, embed });
+  // Contextual retrieval: search the passage with its context line; agents still read the passage as written
+  let context = null;
+  if (contextualizer) {
+    context = await contextualizer.contextualize(chunks, documents, { concurrency, ...contextOptions });
+    chunks = context.chunks;
+  }
+  const vectors = embed ? await mapLimit(chunks, concurrency, (c) => embed(c.indexText ?? c.content)) : chunks.map(() => []);
 
   const store = createMemoryVectorStore();
-  store.add(chunks.map((c, i) => ({ id: c.id, content: c.content, vector: vectors[i], metadata: { docId: c.docId } })));
-  return { chunks, store, byId: new Map(chunks.map((c, i) => [c.id, { ...c, index: i }])), embedder };
+  store.add(chunks.map((c, i) => ({ id: c.id, content: c.content, indexText: c.indexText, vector: vectors[i], metadata: { docId: c.docId } })));
+  return { chunks, store, byId: new Map(chunks.map((c, i) => [c.id, { ...c, index: i }])), embedder, context };
 }
 
 /**
@@ -145,6 +152,8 @@ function createTools(getIndex, getRagforge) {
  * @param {string} [options.chunkStrategy="paragraph"] - See CHUNK_STRATEGIES; semantic needs an embedder
  * @param {number} [options.chunkOverlap=0] - fixed and sentence strategies only
  * @param {number} [options.concurrency=4] - Parallel embedding requests
+ * @param {boolean} [options.contextual=false] - Give each passage an LLM-written context line before indexing (needs llm)
+ * @param {object} [options.contextOptions] - { model, cache, budgetUSD, maxDocumentChars, onEstimate }, see rf.contextualize
  * @param {object|null} [options.embedder] - Embedding provider. Null means keyword search only.
  * @param {object|null} [options.llm] - Chat provider for `ask`. Null means no answers.
  * @param {ReadableStream} [options.stdin=process.stdin]
@@ -159,6 +168,8 @@ async function startMcpServer(options) {
     chunkStrategy = "paragraph",
     chunkOverlap = 0,
     concurrency = 4,
+    contextual = false,
+    contextOptions = {},
     llm = null,
     stdin = process.stdin,
     stdout = process.stdout,
@@ -171,14 +182,38 @@ async function startMcpServer(options) {
   if (chunkStrategy === "semantic" && !embedder) {
     throw new Error("semantic chunking needs embeddings. Pass --embeddings (e.g. --embeddings local), or pick another --chunk-strategy.");
   }
+  if (contextual && !llm) {
+    throw new Error("contextual retrieval needs a chat model to write context lines. Pass --provider (e.g. --provider ollama).");
+  }
   const log = (msg) => stderr.write(`[ragforge mcp] ${msg}\n`);
   const send = (message) => stdout.write(`${JSON.stringify(message)}\n`);
 
-  // Indexing starts right away; tool calls wait for it
+  // Indexing starts right away; tool calls wait for it. `ask` works once the index is ready.
   let rf = null;
-  const indexing = buildIndex(documents, { chunkSize, chunkStrategy, chunkOverlap, embedder, concurrency }).then((index) => {
-    if (llm) rf = createRagforge({ llm, embeddings: embedder, vectorStore: index.store, hybrid: true });
-    log(`indexed ${index.chunks.length} passages from ${documents.length} document(s)${embedder ? "" : " (keyword search only)"}`);
+  const instance = llm ? createRagforge({ llm, embeddings: embedder, hybrid: true }) : null;
+  const indexing = buildIndex(documents, {
+    chunkSize,
+    chunkStrategy,
+    chunkOverlap,
+    embedder,
+    concurrency,
+    contextualizer: contextual ? instance : null,
+    contextOptions: {
+      ...contextOptions,
+      onEstimate: (e) => {
+        log(estimateLine(e));
+        contextOptions.onEstimate?.(e);
+      },
+    },
+  }).then((index) => {
+    if (instance) {
+      instance.setVectorStore(index.store);
+      rf = instance;
+    }
+    const notes = [];
+    if (!embedder) notes.push("keyword search only");
+    if (index.context) notes.push(doneLine(index.context));
+    log(`indexed ${index.chunks.length} passages from ${documents.length} document(s)${notes.length ? ` (${notes.join("; ")})` : ""}`);
     return index;
   });
   indexing.catch((err) => log(`indexing failed: ${err.message || err}`));

@@ -6,6 +6,17 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **Contextual retrieval.** At index time, an LLM writes a line that places each chunk in its document. The line is embedded and keyword-indexed with the chunk, while sources and answers keep the chunk as written.
+  - `npx ragforge eval --contextual` scores two new techniques, `contextual` and `contextual+hybrid`, next to the others. `contextual` combines with the rest (`contextual+rerank`, `contextual+hyde`). In code: `evaluate({ contextual: true })`, or list them in `techniques`.
+  - The cost is estimated and printed before any line is written. `--context-budget <usd>` (`contextOptions.budgetUSD`) stops when the estimate is higher, or when the model has no known price. `--context-model` picks the model that writes the lines.
+  - Lines are cached in `.ragforge/context-cache.json` (`--context-cache <file>`, or `none`) and reused while the chunk, its document and the model are unchanged. Documents over 24,000 characters are cut to a window around each chunk.
+  - The scoreboard and HTML report show the context lines as a one-time index cost, apart from cost per query. The result has `contextual: { model, chunks, contextualized, cached, failed, estimate, usage }`. A contextual technique has to beat plain search by `minImprovement` to be recommended, like other techniques that add LLM calls.
+  - A chunk whose call fails is indexed without context and counted in `failed`. If every call fails, the run stops with the error.
+  - `npx ragforge chat --contextual` and `npx ragforge mcp --provider <name> --contextual` index with context lines too.
+  - `rf.contextualize(chunks, documents, options)` returns chunks with `context` and `indexText` for your own index. `rf.estimateContextCost()` gives the estimate without calling the LLM.
+- `createFileCache(file)`: a `{ get, set }` cache kept in a JSON file, so entries survive between runs.
+- `createMemoryVectorStore()` and `createBM25Index()` accept `indexText` on an entry: it is searched, and results return `content`.
+
 - **Chunking strategies.** `--chunk-strategy` (`chunkStrategy` in `evaluate()`, `chunkStrategy` in `startMcpServer()`) picks how documents are split, in `eval`, `chat`, `mcp` and `label`:
   - `paragraph`: packs whole paragraphs. The default, and unchanged, so existing chunk ids and CI baselines don't move.
   - `fixed`: windows of characters cut at a word.

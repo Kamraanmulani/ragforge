@@ -12,11 +12,15 @@ const { startMcpServer } = require("./mcp/server");
 const { chunkDocuments, CHUNK_STRATEGIES } = require("./eval/chunk");
 const { labelQueries, labelledQuestions, openingWords } = require("./eval/label");
 const { readTraces, uniqueQueries, sample, queryKey } = require("./core/trace");
+const { createFileCache } = require("./core/cache");
+const { usesContextual } = require("./eval/evaluate");
+const { estimateLine, doneLine } = require("./indexing/contextual");
 
 const { runChat, indexDocuments } = require("./chat");
 const { init, TEMPLATES } = require("./init");
 
 const DEFAULT_LABELS_FILE = "ragforge-labels.json";
+const DEFAULT_CONTEXT_CACHE = ".ragforge/context-cache.json";
 
 const HELP = `Usage: ragforge eval --docs <file|dir> [options]
        ragforge label --from-logs <file> --docs <file|dir> [options]
@@ -40,7 +44,8 @@ Options:
                             or an earlier --json result (reuses its questions)
   --question-styles <list>  Generated mix (default question,keywords,conceptual)
   --techniques <list>       Comma-separated (default ${DEFAULT_TECHNIQUES.join(",")})
-                            Available: baseline, hybrid, rerank, hyde, cot, stepback, fanout;
+                            Available: baseline, hybrid, rerank, contextual, hyde, cot,
+                            stepback, fanout;
                             combine with + (hybrid adds BM25 keyword search,
                             rerank needs --reranker)
   --reranker <name>         llm, cohere (COHERE_API_KEY) or jina (JINA_API_KEY);
@@ -67,6 +72,15 @@ Options:
                             reads code files from --docs folders)
   --chunk-overlap <n>       Characters repeated between chunks, fixed and sentence
                             strategies only (default 0)
+  --contextual              Contextual retrieval: an LLM writes a context line for each
+                            chunk, which is embedded and keyword-indexed with it.
+                            eval: adds contextual and contextual+hybrid to the techniques
+                            (or list them in --techniques). One LLM call per chunk,
+                            estimated before it starts and cached
+  --context-model <name>    Chat model for the context lines (default: --model)
+  --context-budget <usd>    Stop before writing context lines that would cost more
+  --context-cache <file>    Where context lines are cached between runs
+                            (default ${DEFAULT_CONTEXT_CACHE}; "none" to turn off)
   --concurrency <n>         Parallel requests (default 4)
   --html <file>             Write a shareable HTML report
   --from-logs <file>        Evaluate on real queries from a JSONL trace log (written by the
@@ -89,7 +103,8 @@ Label options (label command):
 
 Chat options (chat command):
   --docs, --provider, --embeddings, --model, --embedding-model, --top-k, --chunk-size,
-  --chunk-strategy, --chunk-overlap
+  --chunk-strategy, --chunk-overlap, --contextual, --context-model, --context-budget,
+  --context-cache
                             As above. Type a question and press Enter; exit or Ctrl+D to leave.
                             Each question is answered on its own, without earlier turns.
 
@@ -102,6 +117,7 @@ MCP options (mcp command):
   --top-k <n>               Default passages per search_docs / ask call (default 5)
   --chunk-size <n>          Max characters per passage (default 800)
   --chunk-strategy <name>   As for eval; semantic needs --embeddings or --provider
+  --contextual              As for eval; needs --provider (and its --context-* options)
 
 Examples:
   npx ragforge mcp --docs ./docs
@@ -114,6 +130,7 @@ Examples:
   npx ragforge eval --docs ./docs --answers --techniques baseline,hybrid
   npx ragforge eval --docs ./docs --chunk-strategy markdown-heading
   npx ragforge eval --docs ./src --chunk-strategy code --questions 20
+  npx ragforge eval --docs ./docs --contextual --context-budget 0.50
   npx ragforge eval --docs handbook.pdf --docs https://example.com/docs/faq
   npx ragforge eval --docs ./docs --questions-file golden.json --compare main.json --fail-on-drop 3
   npx ragforge label --from-logs traces.jsonl --docs ./docs
@@ -173,6 +190,35 @@ function chunkingFlags(values) {
     chunkSize: toInt(values["chunk-size"], "chunk-size"),
     chunkStrategy: strategy,
     chunkOverlap: toCount(values["chunk-overlap"], "chunk-overlap"),
+  };
+}
+
+/**
+ * contextFlags
+ * --contextual and its --context-* options. `enabled` says whether this run uses
+ * contextual retrieval (for eval, a contextual technique also turns it on).
+ * The cache file is only opened when it is used.
+ */
+function contextFlags(values, { cwd, enabled = values.contextual }) {
+  const budget = values["context-budget"];
+  let budgetUSD;
+  if (budget !== undefined) {
+    budgetUSD = Number(budget.replace(/^\$/, ""));
+    if (budget.trim() === "" || !Number.isFinite(budgetUSD) || budgetUSD < 0) throw new Error("--context-budget must be an amount in US dollars, e.g. 0.50");
+  }
+  const used = ["context-model", "context-budget", "context-cache"].filter((f) => values[f] !== undefined);
+  if (!enabled && used.length) throw new Error(`--${used[0]} needs --contextual`);
+  if (!enabled) return { contextual: false, contextOptions: {} };
+
+  const cacheFile = values["context-cache"] ?? DEFAULT_CONTEXT_CACHE;
+  const cache = cacheFile === "none" ? undefined : createFileCache(path.resolve(cwd, cacheFile));
+  return {
+    contextual: true,
+    contextOptions: {
+      ...(values["context-model"] && { model: values["context-model"] }),
+      ...(budgetUSD !== undefined && { budgetUSD }),
+      ...(cache && { cache }),
+    },
   };
 }
 
@@ -259,6 +305,10 @@ async function main(argv, io = {}) {
         "chunk-size": { type: "string" },
         "chunk-strategy": { type: "string" },
         "chunk-overlap": { type: "string" },
+        contextual: { type: "boolean" },
+        "context-model": { type: "string" },
+        "context-budget": { type: "string" },
+        "context-cache": { type: "string" },
         concurrency: { type: "string" },
         html: { type: "string" },
         json: { type: "string" },
@@ -325,6 +375,7 @@ async function main(argv, io = {}) {
     });
 
     const techniques = toList(values.techniques);
+    const { contextual, contextOptions } = contextFlags(values, { cwd, enabled: values.contextual || Boolean(techniques?.some(usesContextual)) });
 
     stderr.write(`Evaluating ${documents.length} document(s) with ${provider}...\n`);
     // Live counter in a terminal; one line per phase when piped (CI logs)
@@ -342,8 +393,17 @@ async function main(argv, io = {}) {
       concurrency: toInt(values.concurrency, "concurrency"),
       answers: values.answers,
       judgeOptions: values["judge-model"] ? { model: values["judge-model"] } : undefined,
+      contextual: values.contextual,
+      contextOptions: contextual ? { ...contextOptions, onEstimate: (e) => stderr.write(`${estimateLine(e)}\n`) } : undefined,
       onProgress: ({ phase, done, total }) => {
-        const label = { index: "Indexing chunks", questions: "Generating questions", run: "Running techniques", answers: "Writing and grading answers" }[phase];
+        const label = {
+          index: "Indexing chunks",
+          context: "Writing context lines",
+          "context-index": "Indexing contextual chunks",
+          questions: "Generating questions",
+          run: "Running techniques",
+          answers: "Writing and grading answers",
+        }[phase];
         if (live) {
           if (phase !== lastPhase && lastPhase !== null) stderr.write("\n");
           stderr.write(`\r${label}: ${done}/${total}`);
@@ -486,6 +546,7 @@ async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
     const provider = values.provider ?? "openai";
     if (provider === "local") throw new Error("chat needs a chat model, and local has none. Use --provider openai (or ollama, ...) with --embeddings local.");
     const chunking = chunkingFlags(values);
+    const context = contextFlags(values, { cwd });
     const documents = await loadDocuments(values.docs, loadOptions(values, cwd));
     if (!documents.length) throw new Error(NO_DOCUMENTS);
 
@@ -495,14 +556,21 @@ async function runChatCommand(values, { stdin, stdout, stderr, cwd, factory }) {
     });
 
     const live = Boolean(stderr.isTTY);
-    const count = await indexDocuments(rf, documents, {
+    let lastPhase = null;
+    const { count, contextual } = await indexDocuments(rf, documents, {
       ...chunking,
       concurrency: toInt(values.concurrency, "concurrency"),
-      onProgress: ({ done, total }) => {
-        if (live) stderr.write(`\rIndexing: ${done}/${total}`);
+      contextual: context.contextual,
+      contextOptions: { ...context.contextOptions, onEstimate: (e) => stderr.write(`${estimateLine(e)}\n`) },
+      onProgress: ({ phase, done, total }) => {
+        if (!live) return;
+        if (phase !== lastPhase && lastPhase !== null) stderr.write("\n");
+        lastPhase = phase;
+        stderr.write(`\r${phase === "context" ? "Writing context lines" : "Indexing"}: ${done}/${total}`);
       },
     });
-    stderr.write(`${live ? "\r" : ""}Indexed ${count} passages from ${documents.length} document(s) with ${provider}. Ask a question, or type exit.\n\n`);
+    const contextNote = contextual ? `, ${doneLine(contextual)}` : "";
+    stderr.write(`${live ? "\n" : ""}Indexed ${count} passages from ${documents.length} document(s) with ${provider}${contextNote}. Ask a question, or type exit.\n\n`);
 
     await runChat({ rf, topK: toInt(values["top-k"], "top-k"), input: stdin, output: stdout });
     return 0;
@@ -563,6 +631,10 @@ async function runMcp(values, { stdin, stdout, stderr, cwd }) {
   try {
     if (!values.docs) throw new Error("--docs is required, e.g. npx ragforge mcp --docs ./docs");
     const chunking = chunkingFlags(values);
+    const context = contextFlags(values, { cwd });
+    if (context.contextual && (!values.provider || values.provider === "local")) {
+      throw new Error("--contextual needs a chat model to write context lines. Pass --provider, e.g. --provider ollama.");
+    }
     const documents = await loadDocuments(values.docs, loadOptions(values, cwd));
     if (!documents.length) throw new Error(NO_DOCUMENTS);
 
@@ -580,6 +652,7 @@ async function runMcp(values, { stdin, stdout, stderr, cwd }) {
       llm,
       embedder,
       ...chunking,
+      ...context,
       concurrency: toInt(values.concurrency, "concurrency"),
       stdin,
       stdout,

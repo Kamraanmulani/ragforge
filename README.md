@@ -132,6 +132,10 @@ npx ragforge eval --docs ./docs
 | `--chunk-size <n>` | `800` | Max characters per chunk |
 | `--chunk-strategy <name>` | `paragraph` | How documents are split. See [Chunking](#chunking) |
 | `--chunk-overlap <n>` | `0` | Characters repeated between chunks (`fixed` and `sentence`) |
+| `--contextual` | | Also score contextual retrieval. See [Contextual retrieval](#contextual-retrieval) |
+| `--context-model <name>` | same as `--model` | Chat model that writes the context lines |
+| `--context-budget <usd>` | | Stop before writing context lines that would cost more |
+| `--context-cache <file>` | `.ragforge/context-cache.json` | Where context lines are kept between runs; `none` turns it off |
 | `--concurrency <n>` | `4` | Parallel requests |
 | `--html <file>` | | Shareable report, works in light and dark mode |
 | `--json <file>` | | Full results, usable with `auto({ from })` |
@@ -164,6 +168,44 @@ npx ragforge eval --docs ./docs --questions-file paragraph.json --chunk-strategy
 Replayed questions look for their passage's opening words, not its chunk id, and heading marks and whitespace are ignored, so they score fairly across strategies. A passage whose opening words get cut across two chunks counts as a miss, which can happen with `fixed` and `semantic`. Overlap repeats text between chunks, so a fact can be found in two places. That's realistic, but it makes hit rates a little easier than with no overlap.
 
 In code, `chunkText(text, { strategy, size, overlap })` splits one text and `chunkDocuments(documents, { strategy, size, overlap, embed })` splits many (semantic needs `embed`).
+
+### Contextual retrieval
+
+A chunk often doesn't name what it is about: *"They take five business days to arrive"* says nothing about refunds or your product. Contextual retrieval asks an LLM, once per chunk at index time, for a line that places the chunk in its document (*"From the Acme Cloud billing guide, the section on how long refunds take."*). The line is embedded and keyword-indexed with the chunk. Users and the answer still see the chunk as written. Anthropic [reported](https://www.anthropic.com/news/contextual-retrieval) this cut failed retrievals by 35% with embeddings alone and by 49% with keyword search added. On your docs it may help less, or not at all, so measure it:
+
+```bash
+npx ragforge eval --docs ./docs --contextual
+```
+
+`--contextual` adds two techniques to the scoreboard: `contextual` (vector search on the contextual index) and `contextual+hybrid` (with keyword search too). It combines with the others, e.g. `--techniques baseline,hybrid,contextual+hybrid,contextual+rerank`.
+
+- **Cost up front.** Before any context line is written, ragforge prints the number of LLM calls and the estimated cost. Add `--context-budget 0.50` to stop there if it would cost more. `--context-model` picks a cheaper model for the lines.
+- **Paid once.** The scoreboard reports the context lines as a one-time index cost, apart from cost per query, which doesn't change. Because the cost is real, contextual has to beat plain search by 5 points of hit@k to be recommended, like other techniques that add LLM calls.
+- **Cached.** Lines are saved in `.ragforge/context-cache.json` and reused while the chunk, its document and the model stay the same, so later runs only pay for new or changed chunks. Long documents are cut to a 24,000-character window around each chunk.
+- **Chat and MCP.** `npx ragforge chat --docs ./docs --contextual` and `npx ragforge mcp --docs ./docs --provider ollama --contextual` index with context lines too.
+
+To use it in production, index your store with contextual chunks. Embed and keyword-index `indexText`, and store `content` for display:
+
+```js
+const { createRagforge, chunkDocuments, loadDocuments, createFileCache } = require('ragforge');
+
+const rf = createRagforge();
+const documents = await loadDocuments('./docs');
+const chunks = await chunkDocuments(documents, { strategy: 'markdown-heading' });
+
+console.log(await rf.estimateContextCost(chunks, documents)); // { calls, costUSD, ... }
+const { chunks: contextual, stats } = await rf.contextualize(chunks, documents, {
+  budgetUSD: 1,
+  cache: createFileCache('.ragforge/context-cache.json'),
+});
+
+for (const c of contextual) {
+  const vector = await rf.getEmbedding(c.indexText);
+  await db.insert({ id: c.id, content: c.content, search_text: c.indexText, vector });
+}
+```
+
+A chunk whose LLM call fails is indexed without context and counted in `failed`. `createMemoryVectorStore()` and `createBM25Index()` take `indexText` on each entry and search it, while results return `content`. When `auto({ from: eval })` picks a contextual technique, it searches your store as usual: contextual retrieval is a choice about how the store was built.
 
 <details>
 <summary><b>From code, or against your production vector store</b></summary>
@@ -452,6 +494,7 @@ Options:
 - **No key, no model (default).** Keyword search only. Exact terms such as error codes, function names and config keys work well.
 - **Fully local with Ollama.** `npx ragforge mcp --docs ./docs --provider ollama --model qwen2.5` turns on `ask` and vector search with a local model (`nomic-embed-text` by default, so run `ollama pull nomic-embed-text` first).
 - **Hosted models.** `--provider openai` needs `OPENAI_API_KEY`. Add `--embeddings ollama` to keep embeddings local.
+- **Contextual retrieval.** Add `--contextual` (with a `--provider`) to give each passage a context line before indexing. The estimated cost is logged first, and `--context-budget` stops indexing above it. See [Contextual retrieval](#contextual-retrieval).
 
 The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). `--chunk-strategy markdown-heading` gives the agent passages that name their section, and `--chunk-strategy code` serves a source folder (see [Chunking](#chunking)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
 
@@ -498,6 +541,7 @@ await rf.auto(query, { rules: { short: 'hyde+stepback' } });  // change a catego
 |---|---|---|---|
 | **Hybrid** | Adds a BM25 keyword search for the query and fuses it with vector search | Error codes, names, IDs, exact terms | 0 |
 | **Rerank** | Retrieves 20 candidates, then a reranker picks the best *k* | The right chunk is retrieved but ranked too low | 0 (1 with the `llm` reranker), plus 1 reranker call |
+| **Contextual** | Searches chunks indexed with an LLM-written context line ([more](#contextual-retrieval)) | Chunks that don't name their subject | 0 per query, 1 per chunk at index time |
 | **HyDE** | Writes a hypothetical answer and searches with *that* | Short or vague queries | 1, or 2 with a vector store |
 | **Step-Back** | Rewrites the question into a broader, principle-level one | Specific *why/how* questions | 2 |
 | **Fan-Out** | Splits the query into 3 sub-questions and searches each | Comparisons, multi-part questions | 2 |
@@ -806,6 +850,8 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | Method | Returns |
 |---|---|
 | `evaluate(options)` | Scoreboard, recommendation and per-question results |
+| `contextualize(chunks, documents, options)` | `{ chunks, estimate, cached, failed, errors, stats }`; each chunk gains `context` and `indexText` |
+| `estimateContextCost(chunks, documents, options)` | `{ chunks, cached, calls, inputTokens, outputTokens, model, costUSD }` |
 | `auto(query, options)` | Pipeline result plus `route` |
 | `route(query, options)` | `{ technique, category, classifier, decidedBy, reason }` |
 | `ragPipeline(query, options)` | `{ query, translation, retrieved, sources, citations, answer, stats }` |
@@ -818,14 +864,15 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 
 **Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `citations` (true), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `contextual` (false), `contextOptions`, `onProgress`.
+**Context options:** `model`, `llmOptions`, `cache`, `budgetUSD`, `maxDocumentChars` (24000), `concurrency` (4), `onEstimate`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createFileCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 
