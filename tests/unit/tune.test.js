@@ -152,6 +152,17 @@ describe('pickWinner among free setups', () => {
   });
 });
 
+describe('pickWinner ties', () => {
+  test('an exact tie goes to the simpler technique, whatever the latency', () => {
+    const def = trial('default', 0.5, { isDefault: true });
+    for (const [baseMs, hybridMs] of [[1, 0], [0, 1]]) {
+      const base = { ...trial('heading baseline', 1), avgLatencyMs: baseMs };
+      const hybrid = { ...trial('heading hybrid', 1, { technique: 'hybrid' }), avgLatencyMs: hybridMs };
+      expect(pickWinner([def, hybrid, base], def, 0.05).trial).toBe(base);
+    }
+  });
+});
+
 describe('paretoFront', () => {
   test('keeps trials nothing beats on both quality and cost, cheapest first', () => {
     const cheap = trial('cheap', 0.6, { avgCostUSD: 0.000001 });

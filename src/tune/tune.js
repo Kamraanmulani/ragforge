@@ -163,7 +163,11 @@ function netWins(a, b) {
 function pickWinner(trials, defaultTrial, minImprovement, minGainQuestions = 2) {
   const cost = (t) => (t.avgCostUSD === null ? Infinity : t.avgCostUSD);
   const costly = (t) => t.avgLlmCalls > 0 || usesRerank(t.technique) || usesContextual(t.technique);
-  const ranked = [...trials].sort((a, b) => b.hitRate - a.hitRate || b.mrr - a.mrr || cost(a) - cost(b) || Number(b.isDefault) - Number(a.isDefault) || a.avgLatencyMs - b.avgLatencyMs);
+  // Exact ties go to the default, then to the simpler technique (fewer parts: baseline
+  // before hybrid). Never to latency: sub-millisecond differences are timing noise, and
+  // the pick would change from run to run
+  const parts = (t) => parseTechnique(t.technique).filter((p) => p !== "baseline").length;
+  const ranked = [...trials].sort((a, b) => b.hitRate - a.hitRate || b.mrr - a.mrr || cost(a) - cost(b) || Number(b.isDefault) - Number(a.isDefault) || parts(a) - parts(b));
   const pct = (x) => `${Math.round(x * 100)}%`;
   const vsDefault = (t) => (defaultTrial && t !== defaultTrial ? ` vs ${pct(defaultTrial.hitRate)} for the default setup` : "");
   const clear = (challenger, incumbent) => netWins(challenger, incumbent) >= minGainQuestions;
