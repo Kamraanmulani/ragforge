@@ -9,6 +9,8 @@ const { createRagforge } = require("../createRagforge");
 const { mapLimit } = require("../core/limit");
 const { rrf } = require("../techniques/rrf");
 const { estimateLine, doneLine } = require("../indexing/contextual");
+const { syncIndex, embeddingsId, summary: indexSummary } = require("../indexing/persistentIndex");
+const { watchSources } = require("../indexing/watch");
 
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_TOP_K = 5;
@@ -156,6 +158,11 @@ function createTools(getIndex, getRagforge, defaultTopK = DEFAULT_TOP_K) {
  * @param {object} [options.contextOptions] - { model, cache, budgetUSD, maxDocumentChars, onEstimate }, see rf.contextualize
  * @param {number} [options.topK=5] - Passages per search_docs / ask call when the agent doesn't say
  * @param {object} [options.config] - A tuned config (ragforge tune): `ask` uses its technique
+ * @param {string} [options.indexDir] - Keep a saved index here and bring it up to date at startup,
+ *   so unchanged documents aren't embedded again
+ * @param {object} [options.watch] - { sources, cwd, load }: re-read the documents with load() and
+ *   update the index when a file in `sources` changes. Searches keep using the old index until
+ *   the new one is ready
  * @param {object|null} [options.embedder] - Embedding provider. Null means keyword search only.
  * @param {object|null} [options.llm] - Chat provider for `ask`. Null means no answers.
  * @param {ReadableStream} [options.stdin=process.stdin]
@@ -173,6 +180,8 @@ async function startMcpServer(options) {
     contextual = false,
     topK = DEFAULT_TOP_K,
     config = null,
+    indexDir = null,
+    watch = null,
     contextOptions = {},
     llm = null,
     stdin = process.stdin,
@@ -196,32 +205,64 @@ async function startMcpServer(options) {
   let rf = null;
   topKArg(topK);
   const instance = llm ? createRagforge({ llm, embeddings: embedder, hybrid: true, ...(config && { config }) }) : null;
-  const indexing = buildIndex(documents, {
-    chunkSize,
-    chunkStrategy,
-    chunkOverlap,
-    embedder,
-    concurrency,
-    contextualizer: contextual ? instance : null,
-    contextOptions: {
-      ...contextOptions,
-      onEstimate: (e) => {
-        log(estimateLine(e));
-        contextOptions.onEstimate?.(e);
-      },
+  const contextOpts = {
+    ...contextOptions,
+    onEstimate: (e) => {
+      if (e.calls) log(estimateLine(e));
+      contextOptions.onEstimate?.(e);
     },
-  }).then((index) => {
+  };
+  const embed = embedder && (async (text) => (await embedder.embed({ text, model: embedder.embeddingModel })).vector);
+
+  // In memory, or (indexDir) a saved index brought up to date: same shape either way
+  async function build(docs) {
+    if (!indexDir) {
+      return buildIndex(docs, { chunkSize, chunkStrategy, chunkOverlap, embedder, concurrency, contextualizer: contextual ? instance : null, contextOptions: contextOpts });
+    }
+    const synced = await syncIndex({
+      documents: docs,
+      dir: indexDir,
+      chunking: { strategy: chunkStrategy, size: chunkSize, overlap: chunkOverlap },
+      embed,
+      embeddings: embeddingsId(embedder),
+      contextualize: contextual ? (chunks, d) => instance.contextualize(chunks, d, { concurrency, ...contextOpts }) : null,
+      contextual: contextual ? contextOptions.model ?? instance.llm.chatModel : null,
+      concurrency,
+    });
+    const chunks = synced.entries;
+    return { chunks, store: synced.store, byId: new Map(chunks.map((c, i) => [c.id, { ...c, index: i }])), embedder, context: synced.context, synced };
+  }
+
+  function ready(index, docCount) {
     if (instance) {
       instance.setVectorStore(index.store);
       rf = instance;
     }
     const notes = [];
     if (!embedder) notes.push("keyword search only");
-    if (index.context) notes.push(doneLine(index.context));
-    log(`indexed ${index.chunks.length} passages from ${documents.length} document(s)${notes.length ? ` (${notes.join("; ")})` : ""}`);
+    if (index.context && !index.synced) notes.push(doneLine(index.context));
+    if (index.synced) notes.push(`${indexDir}: ${indexSummary(index.synced)}`);
+    log(`indexed ${index.chunks.length} passages from ${docCount} document(s)${notes.length ? ` (${notes.join("; ")})` : ""}`);
     return index;
-  });
+  }
+
+  // Tool calls wait for the first index; later updates replace it only once they are ready
+  let indexing = build(documents).then((index) => ready(index, documents.length));
   indexing.catch((err) => log(`indexing failed: ${err.message || err}`));
+
+  let watcher = null;
+  if (watch) {
+    watcher = watchSources(watch.sources, {
+      cwd: watch.cwd,
+      onChange: async () => {
+        const docs = await watch.load();
+        const index = ready(await build(docs), docs.length);
+        indexing = Promise.resolve(index);
+      },
+      onError: (err) => log(`update failed, still serving the previous index: ${err.message || err}`),
+    });
+    log(`watching ${watcher.watching.length} path(s) for changes${watcher.skipped.length ? ` (URLs are not watched: ${watcher.skipped.join(", ")})` : ""}`);
+  }
 
   const tools = createTools(() => indexing, () => rf, topK);
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
@@ -287,6 +328,7 @@ async function startMcpServer(options) {
   });
 
   await new Promise((resolve) => rl.once("close", resolve));
+  watcher?.close();
   await Promise.allSettled([...pending]);
 }
 

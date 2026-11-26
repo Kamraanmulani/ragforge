@@ -67,7 +67,7 @@ function formatCost(usd) {
 function estimateLine(e) {
   const cost = e.calls === 0 ? "nothing to pay" : e.costUSD === null ? `cost unknown (no price for ${e.model})` : e.costUSD === 0 ? "free" : `estimated ${formatCost(e.costUSD)}`;
   const cached = e.cached ? `, ${e.cached} cached` : "";
-  return `Contextual retrieval: ${e.chunks} chunks${cached}, ${e.calls} LLM call${e.calls === 1 ? "" : "s"} with ${e.model}, ${cost}.`;
+  return `Contextual retrieval: ${e.chunks} chunk${e.chunks === 1 ? "" : "s"}${cached}, ${e.calls} LLM call${e.calls === 1 ? "" : "s"} with ${e.model}, ${cost}.`;
 }
 
 /**

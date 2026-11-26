@@ -18,6 +18,7 @@ const { evaluate } = require("./eval/evaluate");
 const { route, pipelineTechniques, usesHybrid, usesRerank, usesContextual } = require("./router/route");
 const { contextualize, estimateContextCost } = require("./indexing/contextual");
 const { indexDocuments } = require("./indexing/memoryIndex");
+const { syncIndex, loadIndex, embeddingsId } = require("./indexing/persistentIndex");
 const { classifyQuery } = require("./router/classify");
 const { loadConfig } = require("./tune/config");
 const { tune } = require("./tune/tune");
@@ -187,8 +188,8 @@ function createRagforge(options = {}) {
      * Chunks and embeds documents into an in-memory store (vectors + BM25) and uses it.
      * With a tuned config, chunking and contextual retrieval follow the config.
      */
-    index: (documents, opts = {}) =>
-      indexDocuments(rf, documents, {
+    index: async (documents, opts = {}) => {
+      const o = {
         ...(tuned && {
           chunkStrategy: tuned.chunking.strategy,
           chunkSize: tuned.chunking.size,
@@ -196,7 +197,39 @@ function createRagforge(options = {}) {
           contextual: tuned.contextual,
         }),
         ...opts,
-      }),
+      };
+      if (!o.dir) return indexDocuments(rf, documents, o);
+
+      // Saved and incremental: only new and edited documents are chunked and embedded again
+      const ctx = createCallContext(config);
+      const contextOptions = o.contextOptions ?? {};
+      const result = await syncIndex({
+        documents,
+        dir: o.dir,
+        chunking: { strategy: o.chunkStrategy, size: o.chunkSize, overlap: o.chunkOverlap },
+        embed: (text) => ctx.embed(text),
+        embeddings: embeddingsId(embedder),
+        contextualize: o.contextual
+          ? (chunks, docs) => contextualize(ctx, config, chunks, docs, { concurrency: o.concurrency, ...contextOptions })
+          : null,
+        contextual: o.contextual ? contextOptions.model ?? config.defaults.model ?? llm.chatModel : null,
+        concurrency: o.concurrency ?? 4,
+        onProgress: o.onProgress,
+      });
+      config.vectorStore = result.store;
+      return { ...result, count: result.entries.length, contextual: result.context, stats: ctx.tracker.snapshot() };
+    },
+
+    /**
+     * loadIndex
+     * Uses an index saved by rf.index(documents, { dir }) or `ragforge index`, without
+     * reading the documents. Its embedding model must match this instance's.
+     */
+    loadIndex: (dir) => {
+      const loaded = loadIndex(dir, { embeddings: embeddingsId(embedder) });
+      config.vectorStore = loaded.store;
+      return { count: loaded.entries.length, store: loaded.store, manifest: loaded.manifest };
+    },
 
     callLLM: (prompt, opts = {}) => run((ctx) => ctx.chat(prompt, opts), opts),
     getEmbedding: (text, opts = {}) => run((ctx) => ctx.embed(text, opts.model), opts),

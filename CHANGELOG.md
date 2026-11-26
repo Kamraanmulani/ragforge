@@ -6,6 +6,14 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **`npx ragforge index`.** Saves the index of your documents in `.ragforge/index` (`--index <dir>`) and keeps it up to date. Only new and edited files are chunked and embedded again, and deleted files are removed.
+  - A content-hash manifest tells which documents changed. Inside an edited document, a chunk whose text didn't change keeps its vector, so a one-paragraph edit re-embeds about one chunk. With `--contextual`, only changed documents get new context lines.
+  - Changing the chunking, embedding model or contextual settings rebuilds the index, and the summary says why. Vectors from the same model are reused where the text matches.
+  - Saves go through temporary files, and the two index files are checked against each other, so an interrupted save is rebuilt instead of half-used. A damaged index is rebuilt too.
+  - `--watch` keeps running and updates the index when a file changes. Hidden folders (such as `.ragforge` itself) and `node_modules` are ignored, and it works on Node 18 on Linux, which lacks recursive file watching.
+- `chat --index` and `mcp --index` start from the saved index. `mcp --watch` updates it while serving; searches use the previous index until the new one is ready.
+- `rf.index(documents, { dir })` does the same in code and returns what changed. `rf.loadIndex(dir)` serves a saved index without reading the documents, and refuses one built with another embedding model.
+
 - **`npx ragforge tune`.** Finds the retrieval setup that works best on your documents: chunking strategy × chunk size × embedding model × query technique (hybrid, HyDE, Step-Back, Fan-Out, rerank, contextual), within a USD budget (`--budget`, default $0.50). It writes the winner to `ragforge.config.json`.
   - Successive halving: every index setup is screened with plain and hybrid search, then the best few (`--top-setups`) also try the techniques that add LLM calls, reranking or context lines.
   - The plan and its estimated cost are printed before anything is spent. Every step is estimated and checked against the budget, steps that don't fit are skipped and listed, and the run won't start if screening alone is over budget.
@@ -20,6 +28,8 @@ All notable changes to ragforge are documented here. This project follows [Seman
 - `chat` and `mcp` take `--config ragforge.config.json`.
 
 ### Fixed
+
+- `ragforge tune` could pick a different winner from run to run when two trials tied exactly (e.g. `baseline` and `hybrid` on the same setup): the tie was decided by sub-millisecond latency. Exact ties now go to the simpler technique.
 
 - `mcp --top-k` now sets the default number of passages per `search_docs` and `ask` call. The help described it, but the server ignored it.
 - `chat` prints each source on one line, including chunks that start with a heading trail.

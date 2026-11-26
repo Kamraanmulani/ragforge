@@ -18,6 +18,7 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 [Quick start](#quick-start) ·
 [Eval](#benchmark-techniques-on-your-data) ·
 [Tune](#tune-the-whole-setup) ·
+[Index](#keep-an-index-up-to-date) ·
 [Auto-routing](#auto-routing) ·
 [Techniques](#techniques) ·
 [API](#api-reference) ·
@@ -470,6 +471,42 @@ Outputs: `passed` (`true` or `false`), `markdown` and `json` (paths of the repor
 
 From code, `compareEvals(baseline, result, { failOnDrop: 3 })` returns `{ rows, regressions, passed, warnings }`, and `formatComparison()` and `renderMarkdownReport()` print it.
 
+## Keep an index up to date
+
+Re-embedding every document on every start is slow and costs money, and an index built once goes stale as the docs change. `ragforge index` saves the index and keeps it current. Only new and edited files are chunked and embedded again, and deleted files are removed.
+
+```bash
+npx ragforge index --docs ./docs            # build or update .ragforge/index
+npx ragforge index --docs ./docs --watch    # and keep updating it while you edit
+```
+
+```
+2 added, 0 updated, 0 removed, 0 unchanged · embedded 5 chunks, reused 0 · 5 chunks · <$0.0001 · 1.2s
+0 added, 1 updated, 0 removed, 1 unchanged · embedded 1 chunk, reused 1 · 5 chunks · <$0.0001 · 0.4s
+```
+
+- **Per document, then per chunk.** A content hash tells which files changed. Inside an edited file, a chunk whose text didn't change keeps its vector, so fixing a typo in one paragraph re-embeds that paragraph's chunk only. With `--contextual`, only the chunks of edited files get new context lines.
+- **Settings are part of the index.** Changing the chunking, the embedding model or contextual retrieval rebuilds it, and the summary says why (`rebuilt (chunk size 800 → 400)`). Vectors from the same model are still reused where the text matches.
+- **Safe to interrupt.** Files are written through a temporary file and checked against each other when read, so a save cut short is rebuilt rather than half-used.
+- **Use it everywhere.** `chat --index .ragforge/index` and `mcp --index .ragforge/index` start from the saved index. `mcp --watch` keeps it current while it serves, so your coding agent never searches stale docs. During an update, searches use the previous index until the new one is ready.
+
+The index lives in `.ragforge/index` by default (`--index <dir>`): `manifest.json` (settings, and a hash and chunk list per document) and `chunks.json` (chunk text and vectors, stored as base64 Float32). Add `.ragforge/` to `.gitignore`.
+
+In code:
+
+```js
+const rf = createRagforge({ config: 'ragforge.config.json' }); // optional: the tuned chunking
+const docs = await loadDocuments('./docs');
+const { changes, embedded, reused } = await rf.index(docs, { dir: '.ragforge/index' });
+// changes: { added: ['docs/new.md'], updated: [], removed: [], unchanged: 12 }
+
+// At startup in production, without reading the documents:
+rf.loadIndex('.ragforge/index'); // throws if the index was built with another embedding model
+await rf.auto('How long do refunds take?');
+```
+
+The saved index is an in-memory store (vectors plus BM25). It's for docs sites, handbooks and repos up to tens of thousands of chunks. For bigger corpora, keep using a [vector database](#vector-stores).
+
 ## Chat with your docs in the terminal
 
 ```bash
@@ -488,7 +525,7 @@ Sources:
 (hyde · 3 LLM calls · $0.0006 · 2.4s)
 ```
 
-Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k`, `--chunk-size` and `--chunk-strategy` options as `eval`, so `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
+Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k`, `--chunk-size` and `--chunk-strategy` options as `eval`. Add `--index .ragforge/index` to start from a [saved index](#keep-an-index-up-to-date) instead of embedding everything again. So `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
 
 ## Start a new RAG app
 
@@ -554,6 +591,7 @@ Options:
 - **No key, no model (default).** Keyword search only. Exact terms such as error codes, function names and config keys work well.
 - **Fully local with Ollama.** `npx ragforge mcp --docs ./docs --provider ollama --model qwen2.5` turns on `ask` and vector search with a local model (`nomic-embed-text` by default, so run `ollama pull nomic-embed-text` first).
 - **Hosted models.** `--provider openai` needs `OPENAI_API_KEY`. Add `--embeddings ollama` to keep embeddings local.
+- **Saved and live.** `--index .ragforge/index` starts from a [saved index](#keep-an-index-up-to-date), embedding only what changed, and `--watch` updates it while the server runs.
 - **Contextual retrieval.** Add `--contextual` (with a `--provider`) to give each passage a context line before indexing. The estimated cost is logged first, and `--context-budget` stops indexing above it. See [Contextual retrieval](#contextual-retrieval).
 
 The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). `--chunk-strategy markdown-heading` gives the agent passages that name their section, and `--chunk-strategy code` serves a source folder (see [Chunking](#chunking)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
@@ -912,7 +950,8 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 |---|---|
 | `evaluate(options)` | Scoreboard, recommendation and per-question results |
 | `tune(options)` | Every trial, the best setup, the Pareto front and `config` (write it to `ragforge.config.json`) |
-| `index(documents, options)` | Builds and uses an in-memory index, chunked the tuned way: `{ count, contextual, store }` |
+| `index(documents, options)` | Builds and uses an in-memory index, chunked the tuned way: `{ count, contextual, store }`. With `{ dir }` it is saved and updated incrementally: `{ changes, embedded, reused, rebuilt, ... }` |
+| `loadIndex(dir)` | Uses a saved index without the documents: `{ count, store, manifest }` |
 | `contextualize(chunks, documents, options)` | `{ chunks, estimate, cached, failed, errors, stats }`; each chunk gains `context` and `indexText` |
 | `estimateContextCost(chunks, documents, options)` | `{ chunks, cached, calls, inputTokens, outputTokens, model, costUSD }` |
 | `auto(query, options)` | Pipeline result plus `route` |
@@ -929,6 +968,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
 **Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `contextual` (false), `contextOptions`, `onProgress`.
 **Context options:** `model`, `llmOptions`, `cache`, `budgetUSD`, `maxDocumentChars` (24000), `concurrency` (4), `onEstimate`, `onProgress`.
+**Index options:** `dir`, `chunkSize`, `chunkStrategy`, `chunkOverlap`, `contextual`, `contextOptions`, `concurrency` (4), `onProgress`.
 **Tune options:** `documents`, `questions`, `numQuestions` (20), `chunkStrategies`, `chunkSizes`, `embeddingModels`, `techniques`, `contextual`, `contextOptions`, `topSetups` (3), `budgetUSD` (0.5, `null` for none), `topK` (5), `rerankCandidates` (20), `minImprovement` (0.05), `concurrency` (4), `llmOptions`, `onPlan`, `onProgress`.
 
 </details>

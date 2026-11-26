@@ -20,6 +20,8 @@ const { runChat, indexDocuments } = require("./chat");
 const { init, TEMPLATES } = require("./init");
 const { formatTuneTable, renderTuneHtml } = require("./tune/report");
 const { loadConfig } = require("./tune/config");
+const { DEFAULT_INDEX_DIR, summary: indexSummary } = require("./indexing/persistentIndex");
+const { watchSources } = require("./indexing/watch");
 
 const DEFAULT_LABELS_FILE = "ragforge-labels.json";
 const DEFAULT_CONTEXT_CACHE = ".ragforge/context-cache.json";
@@ -32,6 +34,7 @@ const HELP = `Usage: ragforge eval --docs <file|dir> [options]
        ragforge chat --docs <file|dir> [options]
        ragforge init [dir] [--template express|next]
        ragforge mcp --docs <file|dir> [options]
+       ragforge index --docs <file|dir> [--index <dir>] [--watch] [options]
 
 eval: benchmarks RAG query techniques on your documents and recommends one.
 tune: searches chunking, chunk size, embedding model and technique within a budget,
@@ -40,6 +43,9 @@ label: shows real queries from a trace log and asks which passage answers each o
        The labels are saved and used by eval --from-logs. Needs no API key.
 chat:  answers your questions about the documents in the terminal, with sources.
 init:  scaffolds a working RAG app with sample docs, golden questions and a CI eval.
+index: builds a saved index of the documents and keeps it up to date: only new and
+       edited files are chunked and embedded again, deleted files are removed.
+       chat --index and mcp --index use it, so they start without re-embedding.
 mcp:  serves your documents to coding agents (Claude Code, Cursor, Windsurf) over MCP.
       Tools: search_docs, get_chunk, ask. Works with no API key (keyword search).
 
@@ -133,6 +139,15 @@ Tune options (tune command):
   --context-model, --context-cache, --top-k, --concurrency
                             As for eval
 
+Index options (index command; --index also works with chat and mcp):
+  --index <dir>             Where the index is saved (default ${DEFAULT_INDEX_DIR})
+  --watch                   Keep running and update the index when a file changes.
+                            mcp --watch does the same while serving
+  --docs, --provider, --embeddings, --embedding-model, --chunk-strategy, --chunk-size,
+  --chunk-overlap, --contextual, --context-model, --context-cache, --config
+                            As for eval. Changing chunking, embeddings or contextual
+                            rebuilds the index
+
 Config option (chat and mcp):
   --config <file>           Use the setup from ragforge tune: providers, models, chunking,
                             contextual and technique. Flags you pass still win
@@ -169,6 +184,8 @@ Examples:
   npx ragforge init --template next
   npx ragforge tune --docs ./docs --budget 0.50 --html tune.html
   npx ragforge chat --docs ./docs --config ragforge.config.json
+  npx ragforge index --docs ./docs --watch
+  npx ragforge mcp --docs ./docs --provider openai --index .ragforge/index --watch
   npx ragforge eval --from-logs traces.jsonl --docs ./docs
 `;
 
@@ -357,6 +374,8 @@ async function main(argv, io = {}) {
         "top-setups": { type: "string" },
         out: { type: "string" },
         config: { type: "string" },
+        index: { type: "string" },
+        watch: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -377,6 +396,7 @@ async function main(argv, io = {}) {
   if (command === "init") return runInit(values, positionals[1], { stdout, stderr, cwd });
   if (command === "label") return runLabel(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
   if (command === "tune") return runTune(values, { stdout, stderr, cwd, factory });
+  if (command === "index") return runIndex(values, { stdout, stderr, cwd, factory, signal: io.signal });
 
   if (command !== "eval") {
     stderr.write(`Unknown command "${command}".\n\n${HELP}`);
@@ -594,6 +614,78 @@ async function runTune(values, { stdout, stderr, cwd, factory }) {
 }
 
 /**
+ * runIndex
+ * Brings the saved index up to date with the documents. With --watch, keeps doing so
+ * whenever a file changes, until Ctrl+C (or `signal` aborts, in tests).
+ */
+async function runIndex(flags, { stdout, stderr, cwd, factory, signal }) {
+  const say = (s = "") => stdout.write(`${s}\n`);
+  try {
+    if (!flags.docs) throw new Error("--docs is required, e.g. npx ragforge index --docs ./docs");
+    const { values, config } = configFlags(flags, cwd);
+    const chunking = chunkingFlags(values);
+    const context = contextFlags(values, { cwd });
+    // Resolved against the project folder (cwd), not wherever the process happens to run
+    const dir = path.resolve(cwd, values.index ?? DEFAULT_INDEX_DIR);
+    const shownDir = values.index ?? DEFAULT_INDEX_DIR;
+    const provider = values.provider ?? "openai";
+    if (context.contextual && provider === "local") throw new Error("--contextual needs a chat model to write context lines. Use --provider openai (or ollama, ...) with --embeddings local.");
+    const rf = factory({
+      llm: makeProvider(provider, { chatModel: values.model }),
+      embeddings: makeProvider(embeddingsProviderName(values, provider), { embeddingModel: values["embedding-model"] }),
+      ...(config && { config }),
+    });
+
+    const live = Boolean(stderr.isTTY);
+    async function update() {
+      const documents = await loadDocuments(values.docs, loadOptions(values, cwd));
+      const started = Date.now();
+      const result = await rf.index(documents, {
+        ...chunking,
+        dir,
+        concurrency: toInt(values.concurrency, "concurrency"),
+        contextual: context.contextual,
+        contextOptions: { ...context.contextOptions, onEstimate: (e) => e.calls && stderr.write(`${estimateLine(e)}\n`) },
+        onProgress: ({ phase, done, total }) => live && stderr.write(`\r${phase === "context" ? "Writing context lines" : "Embedding"}: ${done}/${total}   `),
+      });
+      if (live) stderr.write("\r\x1b[K");
+      const cost = result.stats.costUSD;
+      const time = new Date().toTimeString().slice(0, 8);
+      say(`${values.watch ? `[${time}] ` : ""}${indexSummary(result)} · ${costText(cost)} · ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      return { result, documents };
+    }
+
+    const first = await update();
+    if (!first.documents.length) stderr.write(`Warning: ${NO_DOCUMENTS}\n`);
+    if (!values.watch) {
+      say(`Index saved to ${shownDir}. Use it with: npx ragforge chat --docs ${values.docs.map((d) => (/\s/.test(d) ? `"${d}"` : d)).join(" --docs ")} --index ${shownDir}`);
+      return 0;
+    }
+
+    const watcher = watchSources(values.docs, {
+      cwd,
+      onChange: () => update(),
+      onError: (err) => stderr.write(`Error: ${err.message || err}\n`),
+    });
+    if (watcher.skipped.length) stderr.write(`Not watched (URLs can't be watched): ${watcher.skipped.join(", ")}\n`);
+    stderr.write(`Watching ${watcher.watching.length} path(s) for changes. Press Ctrl+C to stop.\n`);
+    await new Promise((resolve) => {
+      const stop = () => {
+        process.off("SIGINT", stop);
+        resolve();
+      };
+      process.once("SIGINT", stop);
+      if (signal) signal.aborted ? stop() : signal.addEventListener("abort", stop, { once: true });
+    });
+    watcher.close();
+    return 0;
+  } catch (err) {
+    stderr.write(`\nError: ${err.message}\n`);
+    return 1;
+  }
+}
+
+/**
  * configFlags
  * --config for chat and mcp: the tuned setup fills in every flag you didn't pass
  */
@@ -739,7 +831,7 @@ async function runChatCommand(flags, { stdin, stdout, stderr, cwd, factory }) {
 
     const live = Boolean(stderr.isTTY);
     let lastPhase = null;
-    const { count, contextual } = await indexDocuments(rf, documents, {
+    const indexOptions = {
       ...chunking,
       concurrency: toInt(values.concurrency, "concurrency"),
       contextual: context.contextual,
@@ -750,9 +842,13 @@ async function runChatCommand(flags, { stdin, stdout, stderr, cwd, factory }) {
         lastPhase = phase;
         stderr.write(`\r${phase === "context" ? "Writing context lines" : "Indexing"}: ${done}/${total}`);
       },
-    });
+    };
+    // --index: a saved index that is brought up to date, so unchanged files aren't embedded again
+    const indexed = values.index ? await rf.index(documents, { ...indexOptions, dir: path.resolve(cwd, values.index) }) : await indexDocuments(rf, documents, indexOptions);
+    const { count, contextual } = indexed;
     const contextNote = contextual ? `, ${doneLine(contextual)}` : "";
-    stderr.write(`${live ? "\n" : ""}Indexed ${count} passages from ${documents.length} document(s) with ${provider}${contextNote}. Ask a question, or type exit.\n\n`);
+    if (values.index) stderr.write(`${live ? "\n" : ""}Index ${values.index}: ${indexSummary(indexed)}\n`);
+    stderr.write(`${live && !values.index ? "\n" : ""}Indexed ${count} passages from ${documents.length} document(s) with ${provider}${contextNote}. Ask a question, or type exit.\n\n`);
 
     await runChat({ rf, topK: toInt(values["top-k"], "top-k"), input: stdin, output: stdout });
     return 0;
@@ -839,6 +935,9 @@ async function runMcp(flags, { stdin, stdout, stderr, cwd }) {
       ...(config && { config }),
       topK: toInt(values["top-k"], "top-k"),
       concurrency: toInt(values.concurrency, "concurrency"),
+      indexDir: values.index ? path.resolve(cwd, values.index) : null,
+      // --watch: rebuild (or, with --index, update) the index when a file changes
+      watch: values.watch ? { sources: values.docs, cwd, load: () => loadDocuments(values.docs, loadOptions(values, cwd)) } : null,
       stdin,
       stdout,
       stderr,

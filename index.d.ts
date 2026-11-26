@@ -546,11 +546,15 @@ export interface Ragforge {
   /**
    * Chunk and embed documents into an in-memory store (vectors + BM25) and use it.
    * With a tuned config, chunking and contextual retrieval follow the config.
+   * With `dir`, the index is saved there and later calls only redo what changed.
    */
+  index(documents: Array<string | { id?: string; content: string }>, options: IndexOptions & { dir: string }): Promise<SyncResult>;
   index(
     documents: Array<string | { id?: string; content: string }>,
-    options?: { chunkSize?: number; chunkStrategy?: ChunkStrategy; chunkOverlap?: number; contextual?: boolean; contextOptions?: ContextOptions; concurrency?: number; onProgress?: (p: { phase: "context" | "index"; done: number; total: number }) => void }
+    options?: IndexOptions
   ): Promise<{ count: number; contextual: ContextualizeResult | null; store: MemoryVectorStore }>;
+  /** Use an index saved with index(documents, { dir }) or `ragforge index`, without the documents */
+  loadIndex(dir: string): { count: number; store: MemoryVectorStore; manifest: IndexManifest };
   /** The tuned config this instance was created with, or null */
   readonly config: TunedConfig | null;
 }
@@ -611,6 +615,53 @@ export function chunkDocuments(
 
 export const CHUNK_STRATEGIES: ChunkStrategy[];
 
+export interface IndexOptions {
+  /** Save the index here and keep it up to date on later calls (e.g. ".ragforge/index") */
+  dir?: string;
+  chunkSize?: number;
+  chunkStrategy?: ChunkStrategy;
+  chunkOverlap?: number;
+  contextual?: boolean;
+  contextOptions?: ContextOptions;
+  concurrency?: number;
+  onProgress?: (p: { phase: "context" | "index" | "embed"; done: number; total: number }) => void;
+}
+
+/** What rf.index(documents, { dir }) changed */
+export interface SyncResult {
+  dir: string;
+  count: number;
+  store: MemoryVectorStore;
+  entries: Array<{ id: string; docId: string; content: string; indexText?: string; context?: string; heading?: string; vector: number[] }>;
+  /** Document ids, by what happened to them */
+  changes: { added: string[]; updated: string[]; removed: string[]; unchanged: number };
+  /** Chunks embedded in this call */
+  embedded: number;
+  /** Chunks of edited documents whose text (and vector) didn't change */
+  reused: number;
+  /** Why everything was redone ("chunk size 800 → 400"), or null */
+  rebuilt: string | null;
+  /** Why a damaged saved index was rebuilt, or null */
+  problem: string | null;
+  /** false when nothing changed and nothing was written */
+  saved: boolean;
+  contextual: ContextualizeResult | null;
+  context: ContextualizeResult | null;
+  manifest: IndexManifest;
+  stats: Stats;
+}
+
+/** manifest.json of a saved index */
+export interface IndexManifest {
+  version: 1;
+  generation: string;
+  ragforge: string;
+  savedAt: string;
+  settings: { chunking: { strategy: ChunkStrategy; size: number; overlap: number }; embeddings: string | null; contextual: string | null };
+  chunkCount: number;
+  documents: Record<string, { hash: string; chunks: string[]; source?: string }>;
+}
+
 export interface McpServerOptions {
   /** Documents from loadDocuments() */
   documents: Array<{ id: string; content: string }>;
@@ -618,6 +669,10 @@ export interface McpServerOptions {
   topK?: number;
   /** A tuned config: `ask` answers with its technique */
   config?: TunedConfig | string;
+  /** Keep a saved index here and bring it up to date at startup */
+  indexDir?: string;
+  /** Re-read the documents with load() and update the index when a file in sources changes */
+  watch?: { sources: string[]; cwd?: string; load: () => Promise<Array<{ id: string; content: string }>> } | null;
   /** Max characters per passage (default 800) */
   chunkSize?: number;
   /** How documents are split (default "paragraph"). "semantic" needs an embedder */
