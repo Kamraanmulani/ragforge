@@ -16,6 +16,7 @@ const { translate } = require("./pipeline/queryTranslator");
 const { ragPipeline } = require("./pipeline/ragPipeline");
 const { evaluate } = require("./eval/evaluate");
 const { route, pipelineTechniques, usesHybrid, usesRerank, usesContextual } = require("./router/route");
+const { parseTechnique } = require("./eval/evaluate");
 const { contextualize, estimateContextCost } = require("./indexing/contextual");
 const { indexDocuments } = require("./indexing/memoryIndex");
 const { syncIndex, loadIndex, embeddingsId } = require("./indexing/persistentIndex");
@@ -111,6 +112,35 @@ function createRagforge(options = {}) {
     ...opts,
   });
 
+  // The technique for a query and the pipeline options that run it, shared by auto() and retrieve()
+  async function routeFor(ctx, query, opts) {
+    // `technique` pins one technique (framework adapters use it); otherwise the config or the router decides
+    let chosen;
+    if (opts.technique) {
+      parseTechnique(opts.technique);
+      chosen = { technique: opts.technique, category: classifyQuery(query).category, classifier: "option", decidedBy: "option", reason: `The technique option set ${opts.technique}.` };
+    } else {
+      chosen = configRoute(query, opts) ?? (await route(ctx, query, opts));
+    }
+    let hybrid = opts.hybrid ?? (config.hybrid || usesHybrid(chosen.technique));
+    // An eval-picked hybrid technique degrades to vector search on a store without keyword search
+    if (hybrid && opts.hybrid === undefined && !config.hybrid && !ctx.hasTextSearch()) {
+      hybrid = false;
+      chosen.reason += " Keyword search was skipped because the vector store has no searchText().";
+    }
+    let rerank = opts.rerank ?? (config.rerank || usesRerank(chosen.technique));
+    if (rerank && opts.rerank === undefined && !config.rerank && !ctx.hasReranker()) {
+      rerank = false;
+      chosen.reason += " Reranking was skipped because no reranker is configured.";
+    }
+    // Contextual retrieval happens when the store is indexed; nothing changes at query time.
+    // A tuned instance indexes that way itself in rf.index()
+    if (usesContextual(chosen.technique) && chosen.decidedBy !== "config") {
+      chosen.reason += " Contextual retrieval applies to how the vector store is indexed: build it from rf.contextualize() chunks.";
+    }
+    return { chosen, pipeline: { ...pipelineDefaults(opts), hybrid, rerank, techniques: pipelineTechniques(chosen.technique) } };
+  }
+
   // Adds stats to a pipeline result and traces the call. For a stream, both happen after the last token.
   function withStats(ctx, result, callOptions, type) {
     if (!result.stream) {
@@ -147,25 +177,22 @@ function createRagforge(options = {}) {
     // Routes the query, then runs the pipeline with the chosen technique
     auto: (query, opts = {}) =>
       run(async (ctx) => {
-        const chosen = configRoute(query, opts) ?? (await route(ctx, query, opts));
-        let hybrid = opts.hybrid ?? (config.hybrid || usesHybrid(chosen.technique));
-        // An eval-picked hybrid technique degrades to vector search on a store without keyword search
-        if (hybrid && opts.hybrid === undefined && !config.hybrid && !ctx.hasTextSearch()) {
-          hybrid = false;
-          chosen.reason += " Keyword search was skipped because the vector store has no searchText().";
-        }
-        let rerank = opts.rerank ?? (config.rerank || usesRerank(chosen.technique));
-        if (rerank && opts.rerank === undefined && !config.rerank && !ctx.hasReranker()) {
-          rerank = false;
-          chosen.reason += " Reranking was skipped because no reranker is configured.";
-        }
-        // Contextual retrieval happens when the store is indexed; nothing changes at query time.
-        // A tuned instance indexes that way itself in rf.index()
-        if (usesContextual(chosen.technique) && chosen.decidedBy !== "config") {
-          chosen.reason += " Contextual retrieval applies to how the vector store is indexed: build it from rf.contextualize() chunks.";
-        }
-        const result = await ragPipeline(ctx, query, { ...pipelineDefaults(opts), hybrid, rerank, techniques: pipelineTechniques(chosen.technique) });
+        const { chosen, pipeline } = await routeFor(ctx, query, opts);
+        const result = await ragPipeline(ctx, query, pipeline);
         return withStats(ctx, { ...result, route: chosen }, opts, "auto");
+      }, opts),
+
+    /**
+     * retrieve
+     * Routes the query and retrieves passages like auto(), but writes no answer:
+     * for frameworks (LangChain, AI SDK, LlamaIndex, Mastra) that generate it themselves.
+     * @returns {Promise<{ query, sources, route, translation, retrieved, stats }>}
+     */
+    retrieve: (query, opts = {}) =>
+      run(async (ctx) => {
+        const { chosen, pipeline } = await routeFor(ctx, query, { ...opts, stream: false });
+        const result = await ragPipeline(ctx, query, { ...pipeline, answer: false });
+        return withStats(ctx, { ...result, route: chosen }, opts, "retrieve");
       }, opts),
 
     // Benchmarks retrieval techniques; see src/eval/evaluate.js for options

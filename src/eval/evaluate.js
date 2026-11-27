@@ -13,6 +13,20 @@ const { createMemoryVectorStore } = require("./memoryVectorStore");
 const { judgeAnswer, summarizeAnswers, JUDGE_VERSION } = require("./judge");
 const { contextualize } = require("../indexing/contextual");
 
+// The first words of a passage, matched as text (same as label.js; kept here to avoid a cycle)
+const openingWords = (text, count = 12) => String(text).trim().split(/\s+/).slice(0, count).join(" ");
+
+/**
+ * externalItem
+ * A result from your own retriever, whatever its shape: a string, { content },
+ * LangChain's { pageContent }, or { text }. Becomes { id, content, score, metadata }.
+ */
+function externalItem(item) {
+  if (typeof item === "string") return { id: null, content: item, score: null, metadata: null };
+  const content = item?.content ?? item?.pageContent ?? item?.text ?? "";
+  return { id: item?.id ?? item?.metadata?.id ?? null, content: String(content), score: typeof item?.score === "number" ? item.score : null, metadata: item?.metadata ?? null };
+}
+
 const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 
 // Each technique turns a question into the texts that get embedded and searched.
@@ -259,6 +273,10 @@ function recommend(ranked, topK, minImprovement) {
  * @param {boolean} [options.contextual=false] - Add "contextual" and "contextual+hybrid" to the default techniques
  * @param {object} [options.contextOptions] - For contextual techniques: { model, cache, budgetUSD,
  *   maxDocumentChars, llmOptions, onEstimate }, see src/indexing/contextual.js
+ * @param {object} [options.retrievers] - Your own retrievers to score next to the techniques, e.g.
+ *   { langchain: fromLangChainRetriever(retriever) }: name -> async (query, topK) => results. They
+ *   search their own index, so they are matched on the passage text, not chunk ids. Their cost isn't
+ *   known, and they are never the recommendation (auto() can't route to them)
  * @param {function} [options.onProgress] - ({ phase, done, total }) => void
  */
 async function evaluate(config, options = {}) {
@@ -295,6 +313,11 @@ async function evaluate(config, options = {}) {
 
   // Validate everything before spending any API calls
   techniques.forEach(parseTechnique);
+  const retrievers = Object.entries(options.retrievers ?? {});
+  for (const [name, fn] of retrievers) {
+    if (typeof fn !== "function") throw new Error(`[ragforge] evaluate: retriever "${name}" must be a function (query, topK) => results`);
+    if (QUERY_BUILDERS[name.split("+")[0]] || techniques.includes(name)) throw new Error(`[ragforge] evaluate: retriever name "${name}" is taken by a technique; pick another name`);
+  }
   const chunking = checkChunking({ strategy: chunkStrategy, size: chunkSize, overlap: chunkOverlap });
   if (!textSearch && techniques.some(usesHybrid)) {
     throw new Error("[ragforge] evaluate: hybrid techniques need keyword search. Pass `documents`, or add `searchText(text, topK)` to your vector store.");
@@ -325,6 +348,11 @@ async function evaluate(config, options = {}) {
   givenQuestions?.forEach((q) => {
     if (!q || !q.question || (q.expectedId == null && q.expectedText == null)) {
       throw new Error("[ragforge] evaluate: each question needs `question` and `expectedId` or `expectedText`");
+    }
+    // Your own retrievers search their own index, so chunk ids mean nothing to them: match on text.
+    // (Generated questions always carry their passage, so this only concerns questions you give)
+    if (retrievers.length && q.expectedText == null && typeof q.source !== "string") {
+      throw new Error("[ragforge] evaluate: your own retrievers are matched on the passage text, so each question needs `expectedText`");
     }
   });
 
@@ -383,9 +411,29 @@ async function evaluate(config, options = {}) {
   }
 
   // 3. Run every technique on every question
-  const tasks = questions.flatMap((q, qi) => techniques.map((technique) => ({ q, qi, technique })));
+  const tasks = questions.flatMap((q, qi) => [
+    ...techniques.map((technique) => ({ q, qi, technique })),
+    ...retrievers.map(([name, fn]) => ({ q, qi, technique: name, external: fn })),
+  ]);
   let done = 0;
-  const runs = await mapLimit(tasks, concurrency, async ({ q, qi, technique }) => {
+  const runs = await mapLimit(tasks, concurrency, async ({ q, qi, technique, external }) => {
+    if (external) {
+      const run = { technique, questionIndex: qi, rank: 0, queries: [q.question], retrieved: [], external: true };
+      const started = Date.now();
+      try {
+        const items = ((await external(q.question, topK)) ?? []).map(externalItem).slice(0, topK);
+        const textQuestion = { expectedText: q.expectedText ?? openingWords(q.source) };
+        run.rank = items.findIndex((item) => isMatch(item, null, textQuestion)) + 1;
+        run.retrieved = items.map((item, i) => item.id ?? `#${i + 1}`);
+        run.passages = items.map((item) => item.content);
+      } catch (err) {
+        run.error = err.message || String(err);
+      }
+      // What your retriever spends isn't visible to ragforge
+      run.stats = { llmCalls: 0, embeddingCalls: 0, rerankCalls: 0, cacheHits: 0, inputTokens: 0, outputTokens: 0, costUSD: null, latencyMs: Date.now() - started };
+      onProgress({ phase: "run", done: ++done, total: tasks.length });
+      return run;
+    }
     const searched = usesContextual(technique) ? contextStore : store;
     const ctx = createCallContext({ ...config, vectorStore: searched });
     const run = { technique, questionIndex: qi, rank: 0, queries: [], retrieved: [] };
@@ -451,13 +499,16 @@ async function evaluate(config, options = {}) {
   }
 
   // 5. Score
-  const rows = techniques.map((t) => {
+  const rows = [...techniques, ...retrievers.map(([name]) => name)].map((t) => {
     const own = runs.filter((r) => r.technique === t);
     const row = summarize(t, own);
+    if (retrievers.some(([name]) => name === t)) row.external = true;
     if (answers) row.answers = summarizeAnswers(own.filter((r) => r.judged).map((r) => r.judged));
     return row;
   });
   const ranked = rankRows(rows);
+  // Recommend only what auto() can run: your own retrievers are compared, not routed to
+  const rankedTechniques = ranked.filter((r) => !r.external);
   const answerUsage = answerTracker.snapshot();
 
   return {
@@ -489,8 +540,9 @@ async function evaluate(config, options = {}) {
     }),
     results: rows,
     ranking: ranked.map((r) => r.technique),
-    best: ranked[0].technique,
-    recommendation: recommend(ranked, topK, minImprovement),
+    best: rankedTechniques[0].technique,
+    recommendation: recommend(rankedTechniques, topK, minImprovement),
+    ...(retrievers.length && { retrievers: retrievers.map(([name]) => name) }),
     ...(answers && {
       answers: {
         judgeVersion: JUDGE_VERSION,

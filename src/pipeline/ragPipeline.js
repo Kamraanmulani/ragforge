@@ -41,6 +41,7 @@ function toSource(text, item, ref) {
  *    hybrid: boolean, // also keyword-search the query (store needs searchText)
  *    rerank: boolean, // retrieve rerankK candidates, then reorder them with the instance reranker
  *    citations: boolean, // ask the LLM to cite passages as [1], [2] (default true)
+ *    answer: boolean, // false: stop after retrieval and return the sources, with no LLM answer (default true)
  *    techniqueOptions: { model, temperature, max_tokens, ... },
  *    finalModelOptions: { model, temperature, max_tokens, ... }
  * }
@@ -147,6 +148,9 @@ async function ragPipeline(ctx, query, options = {}) {
   });
 
   const base = { query, translation, retrieved: mergedIdsOrDocs, sources, cite };
+
+  // Retrieval only (rf.retrieve, framework adapters): the caller writes the answer
+  if (options.answer === false) return { query, translation, retrieved: mergedIdsOrDocs, sources };
 
   // Sources are known now, so streaming callers can show them before the first token
   if (options.stream) return streamAnswer(ctx, synthesisPrompt, base, opts.finalModelOptions);

@@ -58,13 +58,13 @@ function formatTable(result) {
   const rows = result.ranking.map((name) => {
     const r = result.results.find((x) => x.technique === name);
     return [
-      name === result.recommendation.technique ? `${name} ★` : name,
+      name === result.recommendation.technique ? `${name} ★` : r.external ? `${name} (yours)` : name,
       pct(r.hitRate),
       r.mrr.toFixed(3),
       ...answerCells(result, r),
       ms(r.avgLatencyMs),
       usd(r.avgCostUSD),
-      String(r.avgLlmCalls),
+      r.external ? "n/a" : String(r.avgLlmCalls),
       r.errors ? String(r.errors) : "",
     ];
   });
@@ -92,6 +92,7 @@ function formatTable(result) {
     `  ${result.recommendation.reason}`,
     `Setup: ${setupParts.join(", ")}`,
     ...(result.contextual ? [contextNote(result.contextual)] : []),
+    ...(result.retrievers ? ["(yours): your own retriever, matched on passage text against its own index. Its cost is not tracked."] : []),
     ...(result.answers ? [answerNote(result)] : []),
   ].join("\n");
 }
@@ -116,12 +117,12 @@ function renderHtmlReport(result, { title = "ragforge eval report" } = {}) {
     .map((r) => {
       const rec = r.technique === recommendation.technique;
       return `<tr${rec ? ' class="rec"' : ""}>
-  <th scope="row">${esc(r.technique)}${rec ? ' <span class="badge">recommended</span>' : ""}</th>
+  <th scope="row">${esc(r.technique)}${rec ? ' <span class="badge">recommended</span>' : ""}${r.external ? ' <span class="badge">yours</span>' : ""}</th>
   <td><div class="bar"><span style="width:${(r.hitRate * 100).toFixed(1)}%"></span></div><b>${pct(r.hitRate)}</b></td>
   <td>${r.mrr.toFixed(3)}</td>${answerCells(result, r).map((cell) => `\n  <td>${esc(cell)}</td>`).join("")}
   <td>${ms(r.avgLatencyMs)}</td>
   <td>${usd(r.avgCostUSD)}</td>
-  <td>${r.avgLlmCalls}</td>
+  <td>${r.external ? "n/a" : r.avgLlmCalls}</td>
   <td>${r.errors || ""}</td>
 </tr>`;
     })

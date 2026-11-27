@@ -263,6 +263,11 @@ export interface EvaluateOptions {
   contextual?: boolean;
   /** For contextual techniques: the model, cache, budget and document window for context lines */
   contextOptions?: ContextOptions;
+  /**
+   * Your own retrievers to score next to the techniques, e.g. { langchain: fromLangChainRetriever(r) }.
+   * Matched on passage text (they use their own index), never recommended
+   */
+  retrievers?: Record<string, ExternalRetriever>;
   onProgress?: (progress: { phase: "index" | "context" | "context-index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
 }
 
@@ -384,6 +389,8 @@ export interface EvalRow {
   errors: number;
   /** Answer quality, when the eval ran with `answers`. Cost and latency above cover retrieval only */
   answers?: EvalAnswerSummary;
+  /** Your own retriever (evaluate({ retrievers })): matched on text, cost not tracked, never recommended */
+  external?: boolean;
 }
 
 export interface EvalRun {
@@ -407,6 +414,8 @@ export interface EvalResult {
   chunkCount: number | null;
   /** How the documents were split. null when evaluating your own vector store */
   chunking?: { strategy: ChunkStrategy; size: number; overlap: number } | null;
+  /** Names of your own retrievers that were scored (evaluate({ retrievers })) */
+  retrievers?: string[];
   /** Present when contextual techniques ran: what writing and indexing the context lines cost, once */
   contextual?: {
     model: string;
@@ -475,13 +484,31 @@ export interface RouteOptions extends CallOptions {
 export interface Route {
   technique: string;
   category: QueryCategory;
-  classifier: "rules" | "llm" | "config";
-  /** "config": the technique from a tuned config (createRagforge({ config })) */
-  decidedBy: "rules" | "eval" | "config";
+  classifier: "rules" | "llm" | "config" | "option";
+  /** "config": the technique from a tuned config (createRagforge({ config })). "option": the `technique` option */
+  decidedBy: "rules" | "eval" | "config" | "option";
   reason: string;
 }
 
+export interface RetrieveResult {
+  query: string;
+  /** Numbered passages, best first */
+  sources: Source[];
+  route: Route;
+  translation: Translation;
+  retrieved: string[];
+  stats: Stats;
+}
+
+/** Your own retriever, for evaluate({ retrievers }): returns passages for a query */
+export type ExternalRetriever = (
+  query: string,
+  topK: number
+) => Promise<Array<string | { id?: string | null; content?: string; pageContent?: string; text?: string; score?: number | null; metadata?: Record<string, unknown> | null }>>;
+
 export interface AutoOptions extends RouteOptions {
+  /** Always use this technique (e.g. "hybrid" or "hybrid+hyde") instead of routing */
+  technique?: EvalTechnique;
   topK?: number;
   rerankK?: number;
   /** Force keyword search on or off; by default it follows the routed technique */
@@ -519,6 +546,11 @@ export interface Ragforge {
   /** Pick a technique for the query, then run the pipeline with it */
   auto(query: string, options: AutoOptions & { stream: true }): Promise<StreamingAutoResult>;
   auto(query: string, options?: AutoOptions): Promise<AutoResult>;
+  /**
+   * Route and retrieve like auto(), without writing an answer: for frameworks that generate
+   * it themselves (see ragforge/langchain, ragforge/ai-sdk, ragforge/llamaindex, ragforge/mastra)
+   */
+  retrieve(query: string, options?: Omit<AutoOptions, "citations" | "finalModelOptions">): Promise<RetrieveResult>;
   /** Benchmark retrieval techniques on your data and get a recommendation */
   evaluate(options: EvaluateOptions): Promise<EvalResult>;
   /**
