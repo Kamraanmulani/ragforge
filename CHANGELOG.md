@@ -6,6 +6,15 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **Framework adapters.** Use ragforge's retrieval inside the framework you already have. Each is a subpath export that loads its framework (an optional peer dependency) only when used:
+  - `ragforge/langchain`: `createRagforgeRetriever(rf)`, a real `BaseRetriever` returning LangChain `Document`s. It works with `.invoke()`, `.pipe()` and `.batch()`.
+  - `ragforge/ai-sdk`: `createRagforgeTool(rf)`, a tool the model calls, and `createRagforgeMiddleware(rf)`, which adds the retrieved passages, numbered, to the system prompt of every call. Built for AI SDK 7.
+  - `ragforge/llamaindex`: `createRagforgeRetriever(rf)`, a real `BaseRetriever` returning `TextNode`s with scores.
+  - `ragforge/mastra`: `createRagforgeTool(rf)`, a tool for Mastra agents and workflows, with a plain JSON schema.
+  - All take `topK` and `technique`. They are tested against the real packages, including a Mastra `Agent` calling the tool.
+- **`rf.retrieve(query)`.** Routes and retrieves like `auto()` but writes no answer, for frameworks that generate it themselves. `auto()` and `retrieve()` take `technique` to skip routing (`route.decidedBy: 'option'`).
+- **Score your own retriever.** `evaluate({ retrievers: { mine: fn } })` scores any `async (query, topK) => passages` next to the techniques, matched on passage text. `fromLangChainRetriever()` and `fromLlamaIndexRetriever()` wrap existing retrievers. They show as `(yours)` on the scoreboard and are never the recommendation.
+
 - **`npx ragforge index`.** Saves the index of your documents in `.ragforge/index` (`--index <dir>`) and keeps it up to date. Only new and edited files are chunked and embedded again, and deleted files are removed.
   - A content-hash manifest tells which documents changed. Inside an edited document, a chunk whose text didn't change keeps its vector, so a one-paragraph edit re-embeds about one chunk. With `--contextual`, only changed documents get new context lines.
   - Changing the chunking, embedding model or contextual settings rebuilds the index, and the summary says why. Vectors from the same model are reused where the text matches.

@@ -19,6 +19,7 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 [Eval](#benchmark-techniques-on-your-data) ·
 [Tune](#tune-the-whole-setup) ·
 [Index](#keep-an-index-up-to-date) ·
+[Frameworks](#use-with-langchain-ai-sdk-llamaindex-and-mastra) ·
 [Auto-routing](#auto-routing) ·
 [Techniques](#techniques) ·
 [API](#api-reference) ·
@@ -596,6 +597,69 @@ Options:
 
 The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). `--chunk-strategy markdown-heading` gives the agent passages that name their section, and `--chunk-strategy code` serves a source folder (see [Chunking](#chunking)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
 
+## Use with LangChain, AI SDK, LlamaIndex and Mastra
+
+Keep your framework; let ragforge do the retrieval. Each adapter is a subpath export that loads its framework only when you use it, so install the framework yourself. `rf.retrieve(query)` underneath runs ragforge's routing (or your [tuned config](#tune-the-whole-setup)), query rewriting, hybrid search and reranking, and returns the passages without writing an answer, so your framework writes it.
+
+```js
+const rf = createRagforge({ config: 'ragforge.config.json' });
+await rf.index(await loadDocuments('./docs'), { dir: '.ragforge/index' });
+```
+
+**LangChain** (`npm i @langchain/core`). A real `BaseRetriever`: use it with `.invoke()`, `.pipe()`, `.batch()` and retrieval chains.
+
+```js
+const { createRagforgeRetriever } = require('ragforge/langchain');
+const retriever = createRagforgeRetriever(rf, { topK: 5 });
+const docs = await retriever.invoke('How long do refunds take?');
+// [Document { id: 'docs/billing.md#3', pageContent: '...', metadata: { ref, score, technique } }]
+```
+
+**Vercel AI SDK** (`npm i ai`, v7). A tool the model calls when it needs the docs, or middleware that adds the passages to every call:
+
+```js
+const { createRagforgeTool, createRagforgeMiddleware } = require('ragforge/ai-sdk');
+const { generateText, wrapLanguageModel, stepCountIs } = require('ai');
+
+// The model decides when to search
+await generateText({ model, tools: { searchDocs: createRagforgeTool(rf) }, stopWhen: stepCountIs(3), prompt });
+
+// Every call answers from the docs, with [n] citations
+const docsModel = wrapLanguageModel({ model, middleware: createRagforgeMiddleware(rf, { onSources: ({ sources }) => show(sources) }) });
+```
+
+The middleware retrieves for the last user message and appends numbered passages to the system prompt (adding one if there is none), so it works with every provider.
+
+**LlamaIndex.TS** (`npm i @llamaindex/core`, included in `llamaindex`). A real `BaseRetriever` returning `TextNode`s with scores, for query engines and agents:
+
+```js
+const { createRagforgeRetriever } = require('ragforge/llamaindex');
+const nodes = await createRagforgeRetriever(rf).retrieve({ query: 'How long do refunds take?' });
+```
+
+**Mastra** (`npm i @mastra/core`). A tool for agents and workflows, with a plain JSON schema (no schema library needed):
+
+```js
+const { createRagforgeTool } = require('ragforge/mastra');
+const agent = new Agent({ id: 'support', name: 'support', instructions: 'Answer from the docs.', model, tools: { searchDocs: createRagforgeTool(rf) } });
+```
+
+Every adapter takes `topK` and `technique` (e.g. `technique: 'hybrid'` to skip routing).
+
+**Score the retriever you have now.** `evaluate()` scores your framework's own retriever next to ragforge's techniques, on the same questions, so you can see what switching would change:
+
+```js
+const { fromLangChainRetriever } = require('ragforge/langchain');  // or fromLlamaIndexRetriever from ragforge/llamaindex
+const result = await rf.evaluate({
+  documents,
+  retrievers: { mine: fromLangChainRetriever(myRetriever) },        // any async (query, topK) => passages works too
+});
+```
+
+Your retriever shows up on the scoreboard as `mine (yours)`. It searches its own index, so its passages are matched on their text, not on chunk ids. Its cost isn't visible to ragforge, and it is never the recommendation, since `auto()` can't run it.
+
+The AI SDK (v7) and parts of Mastra are ES modules. The adapters load them with `require()`, which works on Node.js 20.19+ and 22.12+, and those frameworks need Node 22 anyway.
+
 ## Auto-routing
 
 `auto()` picks a technique for each query, then runs the pipeline with it.
@@ -955,6 +1019,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | `contextualize(chunks, documents, options)` | `{ chunks, estimate, cached, failed, errors, stats }`; each chunk gains `context` and `indexText` |
 | `estimateContextCost(chunks, documents, options)` | `{ chunks, cached, calls, inputTokens, outputTokens, model, costUSD }` |
 | `auto(query, options)` | Pipeline result plus `route` |
+| `retrieve(query, options)` | Like `auto()` without the answer: `{ sources, route, translation, retrieved, stats }`. `technique` pins a technique |
 | `route(query, options)` | `{ technique, category, classifier, decidedBy, reason }` |
 | `ragPipeline(query, options)` | `{ query, translation, retrieved, sources, citations, answer, stats }` |
 | `translate(query, options)` | Technique outputs and retrieval sub-queries |
@@ -968,6 +1033,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
 **Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `contextual` (false), `contextOptions`, `onProgress`.
 **Context options:** `model`, `llmOptions`, `cache`, `budgetUSD`, `maxDocumentChars` (24000), `concurrency` (4), `onEstimate`, `onProgress`.
+**Evaluate `retrievers`:** `{ name: async (query, topK) => passages }`, scored next to the techniques (see [frameworks](#use-with-langchain-ai-sdk-llamaindex-and-mastra)).
 **Index options:** `dir`, `chunkSize`, `chunkStrategy`, `chunkOverlap`, `contextual`, `contextOptions`, `concurrency` (4), `onProgress`.
 **Tune options:** `documents`, `questions`, `numQuestions` (20), `chunkStrategies`, `chunkSizes`, `embeddingModels`, `techniques`, `contextual`, `contextOptions`, `topSetups` (3), `budgetUSD` (0.5, `null` for none), `topK` (5), `rerankCandidates` (20), `minImprovement` (0.05), `concurrency` (4), `llmOptions`, `onPlan`, `onProgress`.
 
