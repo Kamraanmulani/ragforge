@@ -22,6 +22,7 @@ const { formatTuneTable, renderTuneHtml } = require("./tune/report");
 const { loadConfig } = require("./tune/config");
 const { DEFAULT_INDEX_DIR, summary: indexSummary } = require("./indexing/persistentIndex");
 const { watchSources } = require("./indexing/watch");
+const { startUiServer, DEFAULT_PORT } = require("./ui/server");
 
 const DEFAULT_LABELS_FILE = "ragforge-labels.json";
 const DEFAULT_CONTEXT_CACHE = ".ragforge/context-cache.json";
@@ -35,6 +36,7 @@ const HELP = `Usage: ragforge eval --docs <file|dir> [options]
        ragforge init [dir] [--template express|next]
        ragforge mcp --docs <file|dir> [options]
        ragforge index --docs <file|dir> [--index <dir>] [--watch] [options]
+       ragforge ui [--dir <dir>] [--port <n>] [--open]
 
 eval: benchmarks RAG query techniques on your documents and recommends one.
 tune: searches chunking, chunk size, embedding model and technique within a budget,
@@ -46,6 +48,8 @@ init:  scaffolds a working RAG app with sample docs, golden questions and a CI e
 index: builds a saved index of the documents and keeps it up to date: only new and
        edited files are chunked and embedded again, deleted files are removed.
        chat --index and mcp --index use it, so they start without re-embedding.
+ui:    a local dashboard of the eval runs, tune runs, trace logs and saved indexes in a
+       folder: compare runs, see what each technique retrieved, search an index.
 mcp:  serves your documents to coding agents (Claude Code, Cursor, Windsurf) over MCP.
       Tools: search_docs, get_chunk, ask. Works with no API key (keyword search).
 
@@ -148,6 +152,12 @@ Index options (index command; --index also works with chat and mcp):
                             As for eval. Changing chunking, embeddings or contextual
                             rebuilds the index
 
+UI options (ui command):
+  --dir <dir>               Folder to look in, and below (default: the current folder)
+  --port <n>                Port (default ${DEFAULT_PORT}; the next free one if it is taken)
+  --host <host>             Address to listen on (default 127.0.0.1: this computer only)
+  --open                    Open the dashboard in your browser
+
 Config option (chat and mcp):
   --config <file>           Use the setup from ragforge tune: providers, models, chunking,
                             contextual and technique. Flags you pass still win
@@ -185,6 +195,7 @@ Examples:
   npx ragforge tune --docs ./docs --budget 0.50 --html tune.html
   npx ragforge chat --docs ./docs --config ragforge.config.json
   npx ragforge index --docs ./docs --watch
+  npx ragforge ui --open
   npx ragforge mcp --docs ./docs --provider openai --index .ragforge/index --watch
   npx ragforge eval --from-logs traces.jsonl --docs ./docs
 `;
@@ -376,6 +387,10 @@ async function main(argv, io = {}) {
         config: { type: "string" },
         index: { type: "string" },
         watch: { type: "boolean" },
+        dir: { type: "string" },
+        port: { type: "string" },
+        host: { type: "string" },
+        open: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -397,6 +412,7 @@ async function main(argv, io = {}) {
   if (command === "label") return runLabel(values, { stdin: io.stdin ?? process.stdin, stdout, stderr, cwd });
   if (command === "tune") return runTune(values, { stdout, stderr, cwd, factory });
   if (command === "index") return runIndex(values, { stdout, stderr, cwd, factory, signal: io.signal });
+  if (command === "ui") return runUi(values, { stdout, stderr, cwd, factory, signal: io.signal, onListening: io.onListening });
 
   if (command !== "eval") {
     stderr.write(`Unknown command "${command}".\n\n${HELP}`);
@@ -681,6 +697,56 @@ async function runIndex(flags, { stdout, stderr, cwd, factory, signal }) {
     return 0;
   } catch (err) {
     stderr.write(`\nError: ${err.message}\n`);
+    return 1;
+  }
+}
+
+// Opens a URL in the default browser, without waiting for it
+function openBrowser(url) {
+  const { spawn } = require("child_process");
+  const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
+  try {
+    spawn(cmd, args, { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+  } catch {
+    // No browser to open: the URL is printed anyway
+  }
+}
+
+/**
+ * runUi
+ * Serves the dashboard until Ctrl+C (or `signal` aborts, in tests).
+ */
+async function runUi(values, { stdout, stderr, cwd, factory, signal, onListening }) {
+  try {
+    const port = values.port === undefined ? undefined : toCount(values.port, "port");
+    if (port !== undefined && port > 65535) throw new Error("--port must be 65535 or less");
+    const dir = path.resolve(cwd, values.dir ?? ".");
+    const ui = await startUiServer({ dir, port, host: values.host, createRagforge: factory });
+    const found = ui.files();
+    const counts = [["eval", "eval run", "eval runs"], ["tune", "tune run", "tune runs"], ["traces", "trace log", "trace logs"], ["index", "saved index", "saved indexes"], ["config", "tuned config", "tuned configs"]]
+      .map(([kind, one, many]) => [found.filter((f) => f.kind === kind).length, one, many])
+      .filter(([n]) => n)
+      .map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+    stdout.write(`ragforge ui: ${ui.url}\n`);
+    stdout.write(`Looking in ${dir}: ${counts.length ? counts.join(", ") : "nothing yet (write results with eval --json, tune --json, index or onTrace, then reload)"}.\n`);
+    if (values.host && !["127.0.0.1", "localhost", "::1"].includes(values.host)) {
+      stderr.write(`Warning: listening on ${values.host}, so other computers on your network can open the dashboard and read these files.\n`);
+    }
+    stdout.write("Press Ctrl+C to stop.\n");
+    if (values.open) openBrowser(ui.url);
+    onListening?.(ui);
+    await new Promise((resolve) => {
+      const stop = () => {
+        process.off("SIGINT", stop);
+        resolve();
+      };
+      process.once("SIGINT", stop);
+      if (signal) signal.aborted ? stop() : signal.addEventListener("abort", stop, { once: true });
+    });
+    await ui.close();
+    return 0;
+  } catch (err) {
+    stderr.write(`Error: ${err.message}\n`);
     return 1;
   }
 }

@@ -20,6 +20,7 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 [Tune](#tune-the-whole-setup) ·
 [Index](#keep-an-index-up-to-date) ·
 [Frameworks](#use-with-langchain-ai-sdk-llamaindex-and-mastra) ·
+[Dashboard](#see-it-all-in-a-dashboard) ·
 [Auto-routing](#auto-routing) ·
 [Techniques](#techniques) ·
 [API](#api-reference) ·
@@ -352,6 +353,24 @@ const { answer, route } = await rf.auto('How long do refunds take?');
 With your own vector store, read the tuned chunking from `rf.config.chunking` when you index, embed with `rf.getEmbedding()` (it uses the tuned model), and pass the store to `createRagforge`. Options you pass to `createRagforge` win over the config. `chat` and `mcp` take `--config ragforge.config.json` too.
 
 Tune on 20 or more questions. With fewer, a difference of a point or two is noise, and the report says so.
+
+## See it all in a dashboard
+
+```bash
+npx ragforge ui --open
+```
+
+A local dashboard of everything ragforge wrote in this folder and below: eval runs (`--json`), tune runs, trace logs (`onTrace`), saved indexes and tuned configs. Nothing leaves your computer and there is no account.
+
+- **Eval runs.** The scoreboard, then every question with the rank each technique found its passage at. Filter to the misses, or to the questions where techniques disagree, and open one to see what each technique searched for, what it retrieved, and the graded answer when the run used `--answers`.
+- **Compare.** Pick an earlier run to see what changed: hit@k, MRR and faithfulness deltas for each technique, the warnings when runs can't be compared fairly, and the questions whose rank went up or down. Set a drop threshold to see whether `--fail-on-drop` would pass.
+- **Tune runs.** The cost/quality chart with the Pareto front, every trial, and the config that was written.
+- **Trace logs.** The real queries your app answered, with the technique, latency, cost and the passages each answer used.
+- **Saved indexes.** What's in them, and a search box: keyword search needs no API key, and hybrid or vector search makes one embedding call with the index's model.
+
+Results written while it runs show up when you press Reload. Options: `--dir <dir>` (default: the current folder), `--port <n>` (default 4321), `--open`.
+
+It listens on `127.0.0.1` only, refuses requests addressed to any other host name, and only reads the result files it found. The search box, the one feature that can make an API call, only accepts requests from the dashboard itself. Everything from your files is shown as text, so a question or passage containing HTML can't run anything.
 
 ## Evaluate on real user queries
 
@@ -1042,7 +1061,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createFileCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`, `loadConfig`, `formatTuneTable`, `renderTuneHtml`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createFileCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`, `loadConfig`, `formatTuneTable`, `renderTuneHtml`, `startUiServer`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 

@@ -890,6 +890,24 @@ export interface TuneResult {
   questions: Array<{ question: string; expectedText: string; style?: string; source?: string }>;
 }
 
+export interface UiServerOptions {
+  /** Folder to look for eval runs, tune runs, trace logs, saved indexes and configs in, and below (default: cwd) */
+  dir?: string;
+  /** Default 4321 (the next free port if it is taken); 0 picks any free port */
+  port?: number;
+  /** Default "127.0.0.1": this computer only */
+  host?: string;
+}
+
+/** Starts the `ragforge ui` dashboard. Resolves once it is listening */
+export function startUiServer(options?: UiServerOptions): Promise<{
+  url: string;
+  port: number;
+  /** What the dashboard can show right now */
+  files(): Array<{ id: string; kind: "eval" | "tune" | "traces" | "index" | "config"; name: string; modified: string; size: number; summary: Record<string, unknown> }>;
+  close(): Promise<void>;
+}>;
+
 /** Read and check a ragforge.config.json (object or path) */
 export function loadConfig(config: TunedConfig | string, options?: { cwd?: string }): TunedConfig;
 

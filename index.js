@@ -21,6 +21,7 @@ const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 const { startMcpServer } = require("./src/mcp/server");
 const { loadConfig } = require("./src/tune/config");
 const { formatTuneTable, renderTuneHtml } = require("./src/tune/report");
+const { startUiServer } = require("./src/ui/server");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -62,6 +63,7 @@ module.exports = {
   loadConfig,
   formatTuneTable,
   renderTuneHtml,
+  startUiServer,
 
   // v1 API (default instance)
   hyde: (query, options) => getDefault().hyde(query, options),

@@ -6,6 +6,14 @@ All notable changes to ragforge are documented here. This project follows [Seman
 
 ### Added
 
+- **`npx ragforge ui`.** A local dashboard of the eval runs, tune runs, trace logs, saved indexes and tuned configs in a folder (`--dir`) and below, with no account and nothing sent anywhere.
+  - Eval runs: the scoreboard, and every question with each technique's rank. Filter to misses or disagreements, and open a question to see the rewrites, the retrieved chunks and the graded answer.
+  - Compare two eval runs: deltas per technique, comparability warnings, a fail-on-drop check, and the questions whose rank changed.
+  - Tune runs: the cost/quality chart with the Pareto front, all trials, and the written config. Trace logs: the real queries with technique, latency, cost and the passages used.
+  - Saved indexes: their contents, and live search (keyword search needs no key; hybrid and vector search make one embedding call with the index's model).
+  - It listens on 127.0.0.1, refuses other Host names (DNS rebinding), reads only the result files it found, and accepts search requests only from the dashboard itself. It uses a strict Content-Security-Policy, and all file content is shown as text. Plain Node.js `http`, so there are no new dependencies.
+  - `startUiServer()` is exported.
+
 - **Framework adapters.** Use ragforge's retrieval inside the framework you already have. Each is a subpath export that loads its framework (an optional peer dependency) only when used:
   - `ragforge/langchain`: `createRagforgeRetriever(rf)`, a real `BaseRetriever` returning LangChain `Document`s. It works with `.invoke()`, `.pipe()` and `.batch()`.
   - `ragforge/ai-sdk`: `createRagforgeTool(rf)`, a tool the model calls, and `createRagforgeMiddleware(rf)`, which adds the retrieved passages, numbered, to the system prompt of every call. Built for AI SDK 7.
