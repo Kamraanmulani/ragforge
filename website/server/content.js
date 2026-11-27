@@ -125,6 +125,24 @@ function plainTitle(title) {
 }
 
 /**
+ * parseChangelog
+ * "## [2.4.0] - 2026-11-27" headings and their notes, newest first. Link definitions
+ * at the end are dropped. Only published versions are listed: an "Unreleased" section
+ * describes work that isn't on npm yet, so the site doesn't present it as a release.
+ * @param {string} text - CHANGELOG.md
+ * @returns {Array<{ version: string, date: string|null, markdown: string }>}
+ */
+function parseChangelog(text) {
+  return splitAtHeadings(String(text).replace(/\r\n/g, "\n").replace(/^\[[^\]]+\]:\s+\S+\s*$/gm, ""), "##")
+    .filter((r) => r.title)
+    .map((r) => {
+      const m = r.title.match(/^\[?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]?(?:\s*-\s*(\d{4}-\d{2}-\d{2}))?/);
+      return m ? { version: m[1], date: m[2] ?? null, markdown: r.markdown } : null;
+    })
+    .filter(Boolean);
+}
+
+/**
  * loadContent
  * @returns {{ version, sections, releases, search(query, topK), chunkCount }}
  */
@@ -161,13 +179,7 @@ function loadContent(dir = findContentDir()) {
   const index = createBM25Index();
   index.add(entries);
 
-  // "## [2.2.0] - 2026-11-13" then the release notes; link definitions at the end are dropped
-  const releases = splitAtHeadings(changelog.replace(/^\[[^\]]+\]:\s+\S+\s*$/gm, ""), "##")
-    .filter((r) => r.title)
-    .map((r) => {
-      const m = r.title.match(/^\[?([^\]\s]+)\]?(?:\s*-\s*(\d{4}-\d{2}-\d{2}))?/);
-      return { version: m ? m[1] : r.title, date: m?.[2] ?? null, markdown: r.markdown };
-    });
+  const releases = parseChangelog(changelog);
 
   return {
     version: pkg.version,
@@ -189,4 +201,4 @@ function loadContent(dir = findContentDir()) {
   };
 }
 
-module.exports = { loadContent, cleanReadme, slugify, splitAtHeadings, findContentDir };
+module.exports = { loadContent, parseChangelog, cleanReadme, slugify, splitAtHeadings, findContentDir };

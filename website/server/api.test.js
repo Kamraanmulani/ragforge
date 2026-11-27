@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("./app");
-const { cleanReadme, slugify } = require("./content");
+const { cleanReadme, slugify, parseChangelog } = require("./content");
 
 let server;
 let base;
@@ -46,6 +46,22 @@ test("changelog lists releases newest first", async () => {
   assert.ok(body.releases.length >= 3);
   assert.match(body.releases[0].version, /^\d+\.\d+\.\d+$/);
   assert.match(body.releases[0].date, /^\d{4}-\d{2}-\d{2}$/);
+  // The newest release on the site is the version the site's content says is published
+  assert.equal(body.releases[0].version, JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "content", "package.json"), "utf8")).version);
+});
+
+test("docs and changelog are revalidated, so a deploy shows up on the next load", async () => {
+  for (const p of ["/api/changelog", "/api/docs"]) {
+    const res = await fetch(`${base}${p}`);
+    assert.equal(res.headers.get("cache-control"), "no-cache", p);
+    assert.ok(res.headers.get("etag"), `${p} has an ETag, so revalidating costs a 304`);
+  }
+});
+
+test("an Unreleased section is not listed as a release", () => {
+  const releases = parseChangelog(["# Changelog", "", "## [Unreleased]", "", "### Added", "", "- Next thing.", "", "## [2.4.0] - 2026-11-27", "", "- Shipped.", "", "## [2.4.0-beta.1] - 2026-11-20", "", "- Beta.", "", "[2.4.0]: https://example.com/compare"].join("\n"));
+  assert.deepEqual(releases.map((r) => [r.version, r.date]), [["2.4.0", "2026-11-27"], ["2.4.0-beta.1", "2026-11-20"]]);
+  assert.doesNotMatch(releases[0].markdown, /example\.com/);
 });
 
 test("search finds an exact option name", async () => {

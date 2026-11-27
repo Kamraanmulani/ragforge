@@ -236,7 +236,8 @@ mark { background: var(--color-accent-2); color: var(--color-ink); }
 .release { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); gap: var(--space-2xl); padding-block: var(--space-2xl); border-bottom: var(--rule-bar) solid var(--color-ink); scroll-margin-top: var(--nav-h); }
 .release:first-child { padding-top: 0; }
 .release:last-child { border-bottom: 0; }
-.release__ver { font-size: var(--text-display-s); }
+/* Versions only break at the <wbr> hints after dots and hyphens */
+.release__ver { font-size: var(--text-display-s); overflow-wrap: normal; }
 .release time { display: block; margin-top: var(--space-xs); font-weight: 500; font-size: var(--text-sm); color: var(--color-muted); }
 
 .tool { padding-block: var(--space-2xl); border-bottom: var(--rule-bar) solid var(--color-ink); }

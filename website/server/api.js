@@ -67,13 +67,16 @@ function createApi(options = {}) {
     });
   });
 
+  // Docs and changelog change with every release. "no-cache" still lets the browser keep its
+  // copy, but it asks first (the ETag makes that a tiny 304), so a deploy shows up on the next
+  // load instead of up to 5 minutes later
   router.get("/docs", (req, res) => {
-    res.set("Cache-Control", "public, max-age=300");
+    res.set("Cache-Control", "no-cache");
     res.json({ version: content.version, sections: content.sections });
   });
 
   router.get("/changelog", (req, res) => {
-    res.set("Cache-Control", "public, max-age=300");
+    res.set("Cache-Control", "no-cache");
     res.json({ releases: content.releases });
   });
 
