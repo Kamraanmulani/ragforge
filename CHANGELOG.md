@@ -2,7 +2,9 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [2.4.0] - 2026-11-27
+
+Auto-tune: ragforge searches the whole retrieval setup, not just the query technique, keeps its index current, and works inside the framework you already use.
 
 ### Added
 
@@ -202,6 +204,7 @@ Most code needs no changes: `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, 
 
 First stable release with HyDE, Chain-of-Thought, Step-Back, Fan-Out, RRF and the RAG pipeline.
 
+[2.4.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/Kamraanmulani/ragforge/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Kamraanmulani/ragforge/compare/v2.1.0...v2.2.0

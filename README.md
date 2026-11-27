@@ -2,10 +2,10 @@
 
 <img src="https://raw.githubusercontent.com/Kamraanmulani/ragforge/main/assets/logo.svg" alt="ragforge" width="420">
 
-<h3>Find the RAG query technique that works on <em>your</em> data.<br>Then use it automatically.</h3>
+<h3>Find the RAG setup that works on <em>your</em> data.<br>Then ship it.</h3>
 
-HyDE · Step-Back · Fan-Out · Chain-of-Thought · Reciprocal Rank Fusion<br>
-benchmarked on your documents, routed per query, with cost tracking built in.
+AutoRAG for JavaScript: HyDE · Step-Back · Fan-Out · hybrid search · reranking · contextual retrieval<br>
+benchmarked and tuned on your documents, routed per query, with cost tracking built in.
 
 <br>
 
@@ -465,7 +465,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kamraanmulani/ragforge@v2.3.0
+      - uses: Kamraanmulani/ragforge@v2.4.0
         with:
           docs: ./docs
           techniques: baseline,hybrid

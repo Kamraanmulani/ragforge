@@ -1,7 +1,7 @@
 {
   "name": "ragforge",
-  "version": "2.3.1",
-  "description": "Find the RAG retrieval setup that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, hybrid BM25 search and reranking, benchmarked on your documents (Markdown, HTML, PDF, DOCX) and routed per query, with citations and streaming, for OpenAI, Anthropic, Gemini, Ollama or local embeddings, and any vector database. Grades answer faithfulness with an LLM judge, fails CI when retrieval quality drops, and evaluates on real user queries. Includes an MCP server for coding agents.",
+  "version": "2.4.0",
+  "description": "AutoRAG for JavaScript: find the RAG setup that works on your documents, then ship it. Benchmarks query techniques (HyDE, Step-Back, Fan-Out, hybrid BM25, reranking, contextual retrieval) and tunes chunking, chunk size and embedding model within a budget, then routes every query with the winner. Saved incremental index with --watch, answer-quality eval with an LLM judge, CI regression checks, a local dashboard, an MCP server, and adapters for LangChain, the Vercel AI SDK, LlamaIndex and Mastra. Works with OpenAI, Anthropic, Gemini, Ollama, local embeddings and any vector database.",
   "keywords": [
     "rag",
     "genai",
@@ -41,7 +41,14 @@
     "vercel-ai-sdk",
     "llamaindex",
     "mastra",
-    "retriever"
+    "retriever",
+    "autorag",
+    "rag-tuning",
+    "hyperparameter-tuning",
+    "chunking",
+    "contextual-retrieval",
+    "incremental-indexing",
+    "dashboard"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
