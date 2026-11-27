@@ -10,7 +10,7 @@ import Changelog from "./pages/Changelog.jsx";
 import NotFound from "./pages/NotFound.jsx";
 
 const TITLES = {
-  "/": "ragforge: know which RAG technique earns its cost",
+  "/": "ragforge: find the RAG setup that works on your docs, then ship it",
   "/docs": "Docs | ragforge",
   "/playground": "Playground | ragforge",
   "/changelog": "Changelog | ragforge",

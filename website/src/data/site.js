@@ -33,6 +33,7 @@ export const TECHNIQUES = {
   fanout: "Splits the query into three sub-questions and searches each.",
   cot: "Reasons step by step; the reasoning becomes the search query.",
   rerank: "Retrieves 20 candidates, then a reranker picks the best.",
+  contextual: "Searches chunks indexed with an LLM-written line that places each in its document.",
 };
 
 export const SAMPLES = [
@@ -55,6 +56,23 @@ npx ragforge eval --docs ./docs --reranker cohere --html report.html
 npx ragforge eval --docs handbook.pdf --docs https://example.com/faq`,
   },
   {
+    id: "tune",
+    name: "Tune",
+    line: "Search chunking, embeddings and technique within a budget.",
+    lang: "bash",
+    code: `# Try chunking strategy x chunk size x embedding model x technique
+npx ragforge tune --docs ./docs --budget 0.50 --html tune.html
+
+# Plan: 18 setups ... then the best 3 with hyde, stepback, fanout ...
+# Estimated cost: $0.0448, budget $0.5.
+# ★ Best: sentence/800/text-embedding-3-small · baseline
+#   found the right chunk 80% of the time vs 60% for the default setup
+# Config written to ragforge.config.json
+
+# Add reranking and contextual retrieval to the search
+npx ragforge tune --docs ./docs --reranker cohere --contextual`,
+  },
+  {
     id: "auto",
     name: "Route",
     line: "One call picks the technique and answers.",
@@ -73,21 +91,42 @@ result.route.reason;  // why this technique was chosen
 result.stats;         // { llmCalls, inputTokens, costUSD, latencyMs, ... }`,
   },
   {
-    id: "stream",
-    name: "Stream",
-    line: "Sources first, then the answer token by token.",
+    id: "index",
+    name: "Index",
+    line: "Only re-embed what changed. Keep it current while you edit.",
     lang: "js",
-    code: `const result = await rf.auto('How long do refunds take?', { stream: true });
+    code: `const { createRagforge, loadDocuments } = require('ragforge');
 
-console.log(result.sources); // ready before the first token
+// The tuned chunking, embedding model and technique
+const rf = createRagforge({ config: 'ragforge.config.json' });
 
-for await (const token of result.stream) {
-  process.stdout.write(token);
-}
+const { changes, embedded, reused } = await rf.index(
+  await loadDocuments('./docs'),
+  { dir: '.ragforge/index' },
+);
+// changes: { added: ['docs/new.md'], updated: [], removed: [], unchanged: 41 }
+// One edited paragraph re-embeds one chunk.
 
-const answer = await result.answer;       // settles when the stream ends
-const citations = await result.citations; // [1, 2]
-const stats = await result.stats;         // cost and tokens for the whole call`,
+// Or from the terminal, updating on every save:
+// npx ragforge index --docs ./docs --watch`,
+  },
+  {
+    id: "frameworks",
+    name: "Frameworks",
+    line: "LangChain, the AI SDK, LlamaIndex and Mastra.",
+    lang: "js",
+    code: `// LangChain: a real BaseRetriever
+const { createRagforgeRetriever } = require('ragforge/langchain');
+const docs = await createRagforgeRetriever(rf).invoke('How long do refunds take?');
+
+// Vercel AI SDK: a tool the model calls, or middleware for every call
+const { createRagforgeTool, createRagforgeMiddleware } = require('ragforge/ai-sdk');
+await generateText({ model, tools: { searchDocs: createRagforgeTool(rf) }, prompt });
+const docsModel = wrapLanguageModel({ model, middleware: createRagforgeMiddleware(rf) });
+
+// Mastra and LlamaIndex
+const { createRagforgeTool: mastraTool } = require('ragforge/mastra');
+const { createRagforgeRetriever: llamaRetriever } = require('ragforge/llamaindex');`,
   },
   {
     id: "store",
@@ -123,6 +162,20 @@ export const PROVIDERS = [
 
 export const STORES = ["pgvector", "Qdrant", "Chroma", "Pinecone", "LanceDB", "Supabase"];
 
+export const FRAMEWORKS = [
+  { name: "LangChain", path: "ragforge/langchain", line: "A real BaseRetriever returning LangChain Documents. Works with invoke, pipe and batch." },
+  { name: "AI SDK", path: "ragforge/ai-sdk", line: "A tool the model calls when it needs the docs, or middleware that adds cited passages to every call." },
+  { name: "LlamaIndex", path: "ragforge/llamaindex", line: "A real BaseRetriever returning scored TextNodes, for query engines and agents." },
+  { name: "Mastra", path: "ragforge/mastra", line: "A tool for Mastra agents and workflows, with a plain JSON schema." },
+];
+
+export const DASHBOARD = [
+  { name: "Eval runs", line: "Every question with the rank each technique found its passage at. Open one to see what was retrieved and the graded answer." },
+  { name: "Compare", line: "Two runs side by side: what got better, what got worse, and whether --fail-on-drop would pass." },
+  { name: "Tune runs", line: "The cost against quality chart, with the setups worth choosing between." },
+  { name: "Traces and indexes", line: "The real queries your app answered, and a search box over a saved index." },
+];
+
 export const MCP_TOOLS = [
   { name: "search_docs", line: "The most relevant passages with their ids. Keyword search always, vectors when embeddings are set." },
   { name: "get_chunk", line: "One passage, plus the passage before and after it." },
@@ -132,11 +185,15 @@ export const MCP_TOOLS = [
 export const QUESTIONS = [
   {
     q: "Do I need a vector database?",
-    a: "No. The eval indexes documents in memory, and the techniques work without one. For production retrieval you will want one, and any database works through vectorStore.",
+    a: "No. The eval indexes documents in memory, and rf.index() saves an incremental index to disk for docs sites, handbooks and repos. For large corpora use a vector database: any one works through vectorStore.",
   },
   {
     q: "How is this different from LangChain or LlamaIndex?",
-    a: "They are full frameworks. ragforge does one thing: it tells you which query technique helps on your data and applies it per query. It has two runtime dependencies and works next to whatever you already use.",
+    a: "They are frameworks; ragforge is the measurement and tuning layer, and it plugs into them. Use its retriever in LangChain or LlamaIndex, its tool or middleware in the AI SDK or Mastra, and score the retriever you have today next to ragforge's techniques. It has two runtime dependencies.",
+  },
+  {
+    q: "What does tune cost, and how does it pick?",
+    a: "You set a budget (default $0.50). It estimates every step before spending and pays for each distinct API call once. A setup only wins if it beats the default on clearly more questions, and a costlier technique has to beat the best free one by 5 points.",
   },
   {
     q: "Is the eval reliable?",

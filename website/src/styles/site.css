@@ -160,7 +160,7 @@ a:hover { color: var(--color-accent); }
 /* MCP split */
 .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: var(--space-2xl); align-items: center; }
 .split .lead { margin-top: var(--space-lg); }
-.split .cmd { margin-top: var(--space-xl); }
+.split .cmd, .split > div > .btn { margin-top: var(--space-xl); }
 .rows { margin: 0; padding: 0; list-style: none; border-top: var(--rule-bar) solid var(--color-ink); }
 .rows > li { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: var(--gap-columns); align-items: baseline; padding-block: var(--space-lg); border-bottom: var(--rule-hair) solid var(--color-rule); }
 .rows b { font-weight: 800; font-size: var(--text-title); letter-spacing: var(--tracking-display); overflow-wrap: break-word; min-width: 0; }

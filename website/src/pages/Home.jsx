@@ -4,7 +4,7 @@ import Board from "../components/Board.jsx";
 import Code from "../components/Code.jsx";
 import { Command } from "../components/Copy.jsx";
 import RouterDemo from "../components/RouterDemo.jsx";
-import { MCP_TOOLS, PROVIDERS, QUESTIONS, SAMPLES, STORES } from "../data/site.js";
+import { DASHBOARD, FRAMEWORKS, MCP_TOOLS, PROVIDERS, QUESTIONS, SAMPLES, STORES } from "../data/site.js";
 
 function Samples() {
   const [active, setActive] = useState(SAMPLES[0].id);
@@ -75,8 +75,8 @@ export default function Home() {
       <section className="hero">
         <div className="container hero__grid">
           <div>
-            <h1>Know which RAG technique earns its cost.</h1>
-            <p className="lead">Benchmark retrieval on your own documents, then route every query automatically.</p>
+            <h1>Find the RAG setup that works on your docs. Then ship it.</h1>
+            <p className="lead">Benchmark and tune retrieval on your own documents, within a budget, then run every query with what won.</p>
             <div className="hero__actions">
               <Command primary>npm install ragforge</Command>
               <Link className="btn" to="/playground">Route a query live</Link>
@@ -90,24 +90,24 @@ export default function Home() {
       <section className="section band--paper">
         <div className="container">
           <div className="head">
-            <h2>Measure first. Then route.</h2>
-            <p className="lead">HyDE and Step-Back help on some data and do nothing on other data.</p>
+            <h2>Measure. Tune. Ship.</h2>
+            <p className="lead">Chunking, embeddings, hybrid search and HyDE help on some data and do nothing on other data.</p>
           </div>
           <ol className="stations">
             <li>
               <h3>Measure</h3>
-              <p>Scores every technique on questions written from your documents.</p>
+              <p>Scores every technique on questions written from your documents, with cost and latency.</p>
               <code>npx ragforge eval --docs ./docs</code>
             </li>
             <li>
-              <h3>Route</h3>
-              <p>Sends each query to the technique that won.</p>
-              <code>rf.auto(query, {"{ from: evalResult }"})</code>
+              <h3>Tune</h3>
+              <p>Searches chunking, chunk size, embedding model and technique within your budget.</p>
+              <code>npx ragforge tune --docs ./docs --budget 0.50</code>
             </li>
             <li>
-              <h3>Answer</h3>
-              <p>Returns a cited answer, its sources and the exact cost.</p>
-              <code>result.answer, result.sources, result.stats</code>
+              <h3>Ship</h3>
+              <p>Runs the winner, keeps the index current, and fails CI when quality drops.</p>
+              <code>createRagforge({"{ config: 'ragforge.config.json' }"})</code>
             </li>
           </ol>
         </div>
@@ -126,7 +126,7 @@ export default function Home() {
       <section className="section--l">
         <div className="container">
           <div className="head head--stack">
-            <h2>From eval to answer, in code.</h2>
+            <h2>From eval to production, in code.</h2>
           </div>
           <Samples />
         </div>
@@ -171,12 +171,52 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="section band--paper" aria-labelledby="frameworks-head">
+        <div className="container split">
+          <div>
+            <h2 id="frameworks-head">Keep your framework.</h2>
+            <p className="lead">ragforge does the retrieval inside LangChain, the AI SDK, LlamaIndex and Mastra, and scores the retriever you use today next to its own.</p>
+            <Link className="btn" to="/docs#use-with-langchain-ai-sdk-llamaindex-and-mastra">Read the framework guide</Link>
+          </div>
+          <ul className="rows">
+            {FRAMEWORKS.map((f) => (
+              <li key={f.name}>
+                <b>{f.name}</b>
+                <span>
+                  <code>{f.path}</code>
+                  <br />
+                  {f.line}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="section" aria-labelledby="dashboard-head">
+        <div className="container split">
+          <div>
+            <h2 id="dashboard-head">See every run.</h2>
+            <p className="lead">A local dashboard of your eval runs, tune runs, traces and saved indexes. No account, and nothing leaves your computer.</p>
+            <Command>npx ragforge ui --open</Command>
+          </div>
+          <ul className="rows">
+            {DASHBOARD.map((d) => (
+              <li key={d.name}>
+                <b>{d.name}</b>
+                <span>{d.line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
       <section className="section band--paper">
         <div className="container split">
           <div>
             <h2>Give your coding agent the docs.</h2>
-            <p className="lead">One command serves a folder to Claude Code, Cursor or Windsurf over MCP. It needs no API key.</p>
-            <Command>npx ragforge mcp --docs ./docs</Command>
+            <p className="lead">One command serves a folder to Claude Code, Cursor or Windsurf over MCP. It needs no API key, and with --watch it never serves stale docs.</p>
+            <Command>npx ragforge mcp --docs ./docs --watch</Command>
           </div>
           <ul className="rows">
             {MCP_TOOLS.map((tool) => (
@@ -200,7 +240,7 @@ export default function Home() {
         <div className="container close">
           <h2>Run it on your own docs.</h2>
           <div className="close__actions">
-            <Command>npx ragforge eval --docs ./docs</Command>
+            <Command>npx ragforge tune --docs ./docs</Command>
             <Link className="btn" to="/docs#quick-start">Read the quick start</Link>
           </div>
         </div>

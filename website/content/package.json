@@ -1,7 +1,7 @@
 {
   "name": "ragforge",
-  "version": "2.3.1",
-  "description": "Find the RAG retrieval setup that works on your data, then use it automatically. HyDE, Step-Back, Fan-Out, hybrid BM25 search and reranking, benchmarked on your documents (Markdown, HTML, PDF, DOCX) and routed per query, with citations and streaming, for OpenAI, Anthropic, Gemini, Ollama or local embeddings, and any vector database. Grades answer faithfulness with an LLM judge, fails CI when retrieval quality drops, and evaluates on real user queries. Includes an MCP server for coding agents.",
+  "version": "2.4.0",
+  "description": "AutoRAG for JavaScript: find the RAG setup that works on your documents, then ship it. Benchmarks query techniques (HyDE, Step-Back, Fan-Out, hybrid BM25, reranking, contextual retrieval) and tunes chunking, chunk size and embedding model within a budget, then routes every query with the winner. Saved incremental index with --watch, answer-quality eval with an LLM judge, CI regression checks, a local dashboard, an MCP server, and adapters for LangChain, the Vercel AI SDK, LlamaIndex and Mastra. Works with OpenAI, Anthropic, Gemini, Ollama, local embeddings and any vector database.",
   "keywords": [
     "rag",
     "genai",
@@ -35,7 +35,20 @@
     "llm-as-judge",
     "regression-testing",
     "github-action",
-    "rag-pipeline"
+    "rag-pipeline",
+    "langchain",
+    "ai-sdk",
+    "vercel-ai-sdk",
+    "llamaindex",
+    "mastra",
+    "retriever",
+    "autorag",
+    "rag-tuning",
+    "hyperparameter-tuning",
+    "chunking",
+    "contextual-retrieval",
+    "incremental-indexing",
+    "dashboard"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
@@ -69,7 +82,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit",
     "test:integration": "jest tests/integration --runInBand",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit --watch",
-    "typecheck": "tsc --noEmit --strict index.d.ts"
+    "typecheck": "tsc --noEmit --strict index.d.ts src/integrations/langchain.d.ts src/integrations/ai-sdk.d.ts src/integrations/llamaindex.d.ts src/integrations/mastra.d.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
@@ -77,11 +90,27 @@
   },
   "peerDependencies": {
     "@huggingface/transformers": ">=3.0.0",
+    "@langchain/core": ">=1.0.0",
+    "@llamaindex/core": ">=0.6.0",
+    "@mastra/core": ">=1.0.0",
+    "ai": ">=7.0.0",
     "mammoth": ">=1.6.0",
     "unpdf": ">=1.0.0"
   },
   "peerDependenciesMeta": {
     "@huggingface/transformers": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@llamaindex/core": {
+      "optional": true
+    },
+    "@mastra/core": {
+      "optional": true
+    },
+    "ai": {
       "optional": true
     },
     "mammoth": {
@@ -92,11 +121,16 @@
     }
   },
   "devDependencies": {
+    "@langchain/core": "^1.5.1",
+    "@llamaindex/core": "^0.6.22",
+    "@mastra/core": "^1.86.0",
     "@qdrant/js-client-rest": "^1.15.1",
+    "ai": "^7.0.183",
     "jest": "^30.2.0",
     "mammoth": "^1.13.0",
     "typescript": "^5.9.3",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.8.1",
+    "zod": "^4.6.7"
   },
   "exports": {
     ".": {
@@ -129,6 +163,22 @@
     "./supabase": {
       "types": "./src/stores/supabase.d.ts",
       "default": "./src/stores/supabase.js"
+    },
+    "./langchain": {
+      "types": "./src/integrations/langchain.d.ts",
+      "default": "./src/integrations/langchain.js"
+    },
+    "./ai-sdk": {
+      "types": "./src/integrations/ai-sdk.d.ts",
+      "default": "./src/integrations/ai-sdk.js"
+    },
+    "./llamaindex": {
+      "types": "./src/integrations/llamaindex.d.ts",
+      "default": "./src/integrations/llamaindex.js"
+    },
+    "./mastra": {
+      "types": "./src/integrations/mastra.d.ts",
+      "default": "./src/integrations/mastra.js"
     }
   }
 }

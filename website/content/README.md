@@ -2,10 +2,10 @@
 
 <img src="https://raw.githubusercontent.com/Kamraanmulani/ragforge/main/assets/logo.svg" alt="ragforge" width="420">
 
-<h3>Find the RAG query technique that works on <em>your</em> data.<br>Then use it automatically.</h3>
+<h3>Find the RAG setup that works on <em>your</em> data.<br>Then ship it.</h3>
 
-HyDE · Step-Back · Fan-Out · Chain-of-Thought · Reciprocal Rank Fusion<br>
-benchmarked on your documents, routed per query, with cost tracking built in.
+AutoRAG for JavaScript: HyDE · Step-Back · Fan-Out · hybrid search · reranking · contextual retrieval<br>
+benchmarked and tuned on your documents, routed per query, with cost tracking built in.
 
 <br>
 
@@ -17,6 +17,10 @@ benchmarked on your documents, routed per query, with cost tracking built in.
 
 [Quick start](#quick-start) ·
 [Eval](#benchmark-techniques-on-your-data) ·
+[Tune](#tune-the-whole-setup) ·
+[Index](#keep-an-index-up-to-date) ·
+[Frameworks](#use-with-langchain-ai-sdk-llamaindex-and-mastra) ·
+[Dashboard](#see-it-all-in-a-dashboard) ·
 [Auto-routing](#auto-routing) ·
 [Techniques](#techniques) ·
 [API](#api-reference) ·
@@ -130,6 +134,12 @@ npx ragforge eval --docs ./docs
 | `--judge-model <name>` | same as `--model` | Chat model that grades the answers |
 | `--top-k <n>` | `5` | Results per search |
 | `--chunk-size <n>` | `800` | Max characters per chunk |
+| `--chunk-strategy <name>` | `paragraph` | How documents are split. See [Chunking](#chunking) |
+| `--chunk-overlap <n>` | `0` | Characters repeated between chunks (`fixed` and `sentence`) |
+| `--contextual` | | Also score contextual retrieval. See [Contextual retrieval](#contextual-retrieval) |
+| `--context-model <name>` | same as `--model` | Chat model that writes the context lines |
+| `--context-budget <usd>` | | Stop before writing context lines that would cost more |
+| `--context-cache <file>` | `.ragforge/context-cache.json` | Where context lines are kept between runs; `none` turns it off |
 | `--concurrency <n>` | `4` | Parallel requests |
 | `--html <file>` | | Shareable report, works in light and dark mode |
 | `--json <file>` | | Full results, usable with `auto({ from })` |
@@ -138,6 +148,68 @@ npx ragforge eval --docs ./docs
 | `--fail-on-drop <points>` | | With `--compare`: exit 1 when hit@k fell by more than this many points |
 
 With OpenAI, a 10-question run on the default techniques makes about 40 small `gpt-4o-mini` calls plus embeddings. The scoreboard shows the exact cost.
+
+### Chunking
+
+How documents are cut into chunks often matters more than the query technique. Pick a strategy with `--chunk-strategy` (or `chunkStrategy` in `evaluate()`). Every strategy keeps chunks under `--chunk-size`.
+
+| Strategy | Splits | Good for |
+|---|---|---|
+| `paragraph` (default) | Packs whole paragraphs; long ones are split at sentences | Most prose. Unchanged from earlier versions, so saved baselines still match |
+| `fixed` | Windows of characters, cut at a word. `--chunk-overlap` repeats the end of each window | A simple reference point |
+| `sentence` | Packs whole sentences and never cuts one. `--chunk-overlap` repeats the last sentences | Dense text with long paragraphs |
+| `markdown-heading` | One section per chunk, starting with its heading trail, e.g. `Setup > Windows` | Docs sites and READMEs: a passage found on its own still says what it's about |
+| `semantic` | Sentences, split where the topic shifts (embedding similarity drops) | Long pages without headings. Costs one embedding call per sentence, shown in the setup cost |
+| `code` | Source files by top-level function, class or declaration, keeping comments and decorators with them. Other files by paragraph | Code search. Also reads `.js`, `.ts`, `.py`, `.go`, `.rs`, `.java` and other source files from `--docs` folders, skipping `dist`, `build` and `vendor` |
+
+To see which works on your docs, save a run and replay its questions with another strategy:
+
+```bash
+npx ragforge eval --docs ./docs --json paragraph.json
+npx ragforge eval --docs ./docs --questions-file paragraph.json --chunk-strategy markdown-heading --compare paragraph.json
+```
+
+Replayed questions look for their passage's opening words, not its chunk id, and heading marks and whitespace are ignored, so they score fairly across strategies. A passage whose opening words get cut across two chunks counts as a miss, which can happen with `fixed` and `semantic`. Overlap repeats text between chunks, so a fact can be found in two places. That's realistic, but it makes hit rates a little easier than with no overlap.
+
+In code, `chunkText(text, { strategy, size, overlap })` splits one text and `chunkDocuments(documents, { strategy, size, overlap, embed })` splits many (semantic needs `embed`).
+
+### Contextual retrieval
+
+A chunk often doesn't name what it is about: *"They take five business days to arrive"* says nothing about refunds or your product. Contextual retrieval asks an LLM, once per chunk at index time, for a line that places the chunk in its document (*"From the Acme Cloud billing guide, the section on how long refunds take."*). The line is embedded and keyword-indexed with the chunk. Users and the answer still see the chunk as written. Anthropic [reported](https://www.anthropic.com/news/contextual-retrieval) this cut failed retrievals by 35% with embeddings alone and by 49% with keyword search added. On your docs it may help less, or not at all, so measure it:
+
+```bash
+npx ragforge eval --docs ./docs --contextual
+```
+
+`--contextual` adds two techniques to the scoreboard: `contextual` (vector search on the contextual index) and `contextual+hybrid` (with keyword search too). It combines with the others, e.g. `--techniques baseline,hybrid,contextual+hybrid,contextual+rerank`.
+
+- **Cost up front.** Before any context line is written, ragforge prints the number of LLM calls and the estimated cost. Add `--context-budget 0.50` to stop there if it would cost more. `--context-model` picks a cheaper model for the lines.
+- **Paid once.** The scoreboard reports the context lines as a one-time index cost, apart from cost per query, which doesn't change. Because the cost is real, contextual has to beat plain search by 5 points of hit@k to be recommended, like other techniques that add LLM calls.
+- **Cached.** Lines are saved in `.ragforge/context-cache.json` and reused while the chunk, its document and the model stay the same, so later runs only pay for new or changed chunks. Long documents are cut to a 24,000-character window around each chunk.
+- **Chat and MCP.** `npx ragforge chat --docs ./docs --contextual` and `npx ragforge mcp --docs ./docs --provider ollama --contextual` index with context lines too.
+
+To use it in production, index your store with contextual chunks. Embed and keyword-index `indexText`, and store `content` for display:
+
+```js
+const { createRagforge, chunkDocuments, loadDocuments, createFileCache } = require('ragforge');
+
+const rf = createRagforge();
+const documents = await loadDocuments('./docs');
+const chunks = await chunkDocuments(documents, { strategy: 'markdown-heading' });
+
+console.log(await rf.estimateContextCost(chunks, documents)); // { calls, costUSD, ... }
+const { chunks: contextual, stats } = await rf.contextualize(chunks, documents, {
+  budgetUSD: 1,
+  cache: createFileCache('.ragforge/context-cache.json'),
+});
+
+for (const c of contextual) {
+  const vector = await rf.getEmbedding(c.indexText);
+  await db.insert({ id: c.id, content: c.content, search_text: c.indexText, vector });
+}
+```
+
+A chunk whose LLM call fails is indexed without context and counted in `failed`. `createMemoryVectorStore()` and `createBM25Index()` take `indexText` on each entry and search it, while results return `content`. When `auto({ from: eval })` picks a contextual technique, it searches your store as usual: contextual retrieval is a choice about how the store was built.
 
 <details>
 <summary><b>From code, or against your production vector store</b></summary>
@@ -222,6 +294,83 @@ const docs = await loadDocuments(['./docs', 'contracts/terms.pdf', 'https://exam
 ```
 
 Folders are read recursively, skipping hidden files and `node_modules`. File ids are relative paths (`docs/guides/faq.html`), and URL ids are the URL. Use `htmlToText(html)` if you already have the HTML.
+
+## Tune the whole setup
+
+`eval` compares query techniques on one index. `tune` also changes how the index is built: chunking strategy, chunk size and embedding model. It finds the combination that works best on your documents, within a budget, and writes it to a config file your app loads.
+
+```bash
+npx ragforge tune --docs ./docs --budget 0.50 --html tune.html
+```
+
+```
+Plan: 8 setups (paragraph, sentence × 800, 1200 chars × text-embedding-ada-002, text-embedding-3-small) with baseline and hybrid, then the best 1 with hyde, stepback, fanout, hybrid+hyde, hybrid+stepback, hybrid+fanout, on 20 generated questions.
+Estimated cost: $0.0275 (questions $0.0013, screening $0.0102, refining $0.0159), budget $0.1.
+...
+★ Best: sentence/800/text-embedding-3-small · baseline
+  baseline on sentence/800/text-embedding-3-small found the right chunk 80% of the time vs 60% for the default setup, with no extra LLM calls. hybrid+fanout on sentence/800/text-embedding-3-small scored 80%, not a clear enough gain to justify its extra cost.
+  Changes from the default: chunking paragraph → sentence, embeddings text-embedding-ada-002 → text-embedding-3-small. hit@5 60% → 80% (+20 points).
+Spent $0.0176 of a $0.1 budget (estimated $0.0275).
+
+Config written to ragforge.config.json.
+```
+
+<sub>A real run on ragforge's own README, changelog and plan (83 KB of Markdown) with `--chunk-strategies paragraph,sentence --chunk-sizes 800,1200 --top-setups 1 --budget 0.10`. It took 3 minutes. The full default search (18 setups, 3 refined) cost $0.03 and took 9 minutes.</sub>
+
+How it searches:
+
+1. **Questions.** It writes test questions from short passages of your documents, once, and checks every setup against the same questions. Each passage is matched by its text, so a question still finds its answer when the chunking changes.
+2. **Screen.** Every index setup runs with the techniques that add no LLM call per query: plain vector search and hybrid search.
+3. **Refine.** The best setups (`--top-setups`, default 3) also run the costlier techniques: HyDE, Step-Back and Fan-Out with and without keyword search, plus reranking with `--reranker` and contextual retrieval with `--contextual`.
+4. **Pick.** The best of many noisy scores is often just lucky, so a challenger has to win clearly. A setup replaces the default only if it ranks the right chunk higher on at least 2 more questions than it ranks it lower, comparing question by question. A cheaper setup (20% or more, per query or to index) that is about as good is preferred to a pricier one. A technique that adds LLM calls, reranking or context lines must also beat the chosen free setup by 5 points of hit@k. Ties keep the default, since a tie is no reason to rebuild your index.
+
+It stays within the budget. The cost of every step is estimated before it runs, steps that don't fit are skipped (and listed), and the run never starts if screening alone costs more than the budget. Each distinct API call is made only once. The same chunk embedded for two setups, or the same HyDE draft for two techniques, is paid for once. Cost per query is still reported as production would pay it.
+
+`--html` writes a chart of hit rate against cost per query for every trial. It marks the *Pareto front*: the trials no other trial beats on both quality and cost, so you can see what more money buys. The tables also show the average chunk length, because bigger chunks find more but send more text to the LLM with every answer.
+
+| Option | Default | |
+|---|---|---|
+| `--budget <usd\|none>` | `0.50` | Most the whole run may spend |
+| `--chunk-strategies <list>` | `paragraph,markdown-heading,sentence` | See [Chunking](#chunking) |
+| `--chunk-sizes <list>` | `400,800,1200` | Characters |
+| `--embedding-models <list>` | the provider's (+ `text-embedding-3-small` on OpenAI) | Changing the model means re-embedding your store |
+| `--techniques <list>` | `hyde,stepback,fanout` and their `hybrid+` forms | Tried on the best setups |
+| `--top-setups <n>` | `3` | Setups that get the costlier techniques |
+| `--questions <n>` | `20` | Or `--questions-file`, e.g. an earlier `eval --json` result |
+| `--reranker`, `--contextual` | | Add reranking or contextual retrieval to the search |
+| `--out <file>` | `ragforge.config.json` | Where the winner is written |
+| `--json`, `--html` | | Every trial; the HTML has the chart |
+
+Use the result in your app. The config sets the providers and models, the technique every query uses, `topK`, and how `rf.index()` chunks (and whether it adds context lines):
+
+```js
+const rf = createRagforge({ config: 'ragforge.config.json' });
+await rf.index(await loadDocuments('./docs')); // in-memory index, built the tuned way
+const { answer, route } = await rf.auto('How long do refunds take?');
+// route.decidedBy === 'config'
+```
+
+With your own vector store, read the tuned chunking from `rf.config.chunking` when you index, embed with `rf.getEmbedding()` (it uses the tuned model), and pass the store to `createRagforge`. Options you pass to `createRagforge` win over the config. `chat` and `mcp` take `--config ragforge.config.json` too.
+
+Tune on 20 or more questions. With fewer, a difference of a point or two is noise, and the report says so.
+
+## See it all in a dashboard
+
+```bash
+npx ragforge ui --open
+```
+
+A local dashboard of everything ragforge wrote in this folder and below: eval runs (`--json`), tune runs, trace logs (`onTrace`), saved indexes and tuned configs. Nothing leaves your computer and there is no account.
+
+- **Eval runs.** The scoreboard, then every question with the rank each technique found its passage at. Filter to the misses, or to the questions where techniques disagree, and open one to see what each technique searched for, what it retrieved, and the graded answer when the run used `--answers`.
+- **Compare.** Pick an earlier run to see what changed: hit@k, MRR and faithfulness deltas for each technique, the warnings when runs can't be compared fairly, and the questions whose rank went up or down. Set a drop threshold to see whether `--fail-on-drop` would pass.
+- **Tune runs.** The cost/quality chart with the Pareto front, every trial, and the config that was written.
+- **Trace logs.** The real queries your app answered, with the technique, latency, cost and the passages each answer used.
+- **Saved indexes.** What's in them, and a search box: keyword search needs no API key, and hybrid or vector search makes one embedding call with the index's model.
+
+Results written while it runs show up when you press Reload. Options: `--dir <dir>` (default: the current folder), `--port <n>` (default 4321), `--open`.
+
+It listens on `127.0.0.1` only, refuses requests addressed to any other host name, and only reads the result files it found. The search box, the one feature that can make an API call, only accepts requests from the dashboard itself. Everything from your files is shown as text, so a question or passage containing HTML can't run anything.
 
 ## Evaluate on real user queries
 
@@ -316,7 +465,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kamraanmulani/ragforge@v2.3.0
+      - uses: Kamraanmulani/ragforge@v2.4.0
         with:
           docs: ./docs
           techniques: baseline,hybrid
@@ -342,6 +491,42 @@ Outputs: `passed` (`true` or `false`), `markdown` and `json` (paths of the repor
 
 From code, `compareEvals(baseline, result, { failOnDrop: 3 })` returns `{ rows, regressions, passed, warnings }`, and `formatComparison()` and `renderMarkdownReport()` print it.
 
+## Keep an index up to date
+
+Re-embedding every document on every start is slow and costs money, and an index built once goes stale as the docs change. `ragforge index` saves the index and keeps it current. Only new and edited files are chunked and embedded again, and deleted files are removed.
+
+```bash
+npx ragforge index --docs ./docs            # build or update .ragforge/index
+npx ragforge index --docs ./docs --watch    # and keep updating it while you edit
+```
+
+```
+2 added, 0 updated, 0 removed, 0 unchanged · embedded 5 chunks, reused 0 · 5 chunks · <$0.0001 · 1.2s
+0 added, 1 updated, 0 removed, 1 unchanged · embedded 1 chunk, reused 1 · 5 chunks · <$0.0001 · 0.4s
+```
+
+- **Per document, then per chunk.** A content hash tells which files changed. Inside an edited file, a chunk whose text didn't change keeps its vector, so fixing a typo in one paragraph re-embeds that paragraph's chunk only. With `--contextual`, only the chunks of edited files get new context lines.
+- **Settings are part of the index.** Changing the chunking, the embedding model or contextual retrieval rebuilds it, and the summary says why (`rebuilt (chunk size 800 → 400)`). Vectors from the same model are still reused where the text matches.
+- **Safe to interrupt.** Files are written through a temporary file and checked against each other when read, so a save cut short is rebuilt rather than half-used.
+- **Use it everywhere.** `chat --index .ragforge/index` and `mcp --index .ragforge/index` start from the saved index. `mcp --watch` keeps it current while it serves, so your coding agent never searches stale docs. During an update, searches use the previous index until the new one is ready.
+
+The index lives in `.ragforge/index` by default (`--index <dir>`): `manifest.json` (settings, and a hash and chunk list per document) and `chunks.json` (chunk text and vectors, stored as base64 Float32). Add `.ragforge/` to `.gitignore`.
+
+In code:
+
+```js
+const rf = createRagforge({ config: 'ragforge.config.json' }); // optional: the tuned chunking
+const docs = await loadDocuments('./docs');
+const { changes, embedded, reused } = await rf.index(docs, { dir: '.ragforge/index' });
+// changes: { added: ['docs/new.md'], updated: [], removed: [], unchanged: 12 }
+
+// At startup in production, without reading the documents:
+rf.loadIndex('.ragforge/index'); // throws if the index was built with another embedding model
+await rf.auto('How long do refunds take?');
+```
+
+The saved index is an in-memory store (vectors plus BM25). It's for docs sites, handbooks and repos up to tens of thousands of chunks. For bigger corpora, keep using a [vector database](#vector-stores).
+
 ## Chat with your docs in the terminal
 
 ```bash
@@ -360,7 +545,7 @@ Sources:
 (hyde · 3 LLM calls · $0.0006 · 2.4s)
 ```
 
-Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k` and `--chunk-size` options as `eval`, so `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
+Each question is routed like `auto()` and uses hybrid search. It takes the same `--provider`, `--embeddings`, `--model`, `--top-k`, `--chunk-size` and `--chunk-strategy` options as `eval`. Add `--index .ragforge/index` to start from a [saved index](#keep-an-index-up-to-date) instead of embedding everything again. So `--provider ollama --model qwen2.5` runs it fully locally. Questions are answered one at a time, without earlier turns. Type `exit` to leave.
 
 ## Start a new RAG app
 
@@ -426,8 +611,73 @@ Options:
 - **No key, no model (default).** Keyword search only. Exact terms such as error codes, function names and config keys work well.
 - **Fully local with Ollama.** `npx ragforge mcp --docs ./docs --provider ollama --model qwen2.5` turns on `ask` and vector search with a local model (`nomic-embed-text` by default, so run `ollama pull nomic-embed-text` first).
 - **Hosted models.** `--provider openai` needs `OPENAI_API_KEY`. Add `--embeddings ollama` to keep embeddings local.
+- **Saved and live.** `--index .ragforge/index` starts from a [saved index](#keep-an-index-up-to-date), embedding only what changed, and `--watch` updates it while the server runs.
+- **Contextual retrieval.** Add `--contextual` (with a `--provider`) to give each passage a context line before indexing. The estimated cost is logged first, and `--context-budget` stops indexing above it. See [Contextual retrieval](#contextual-retrieval).
 
-The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
+The same document loaders as `eval` run here, so `.md`, `.html`, `.pdf` and `.docx` files all work (see [Documents](#documents)). `--chunk-strategy markdown-heading` gives the agent passages that name their section, and `--chunk-strategy code` serves a source folder (see [Chunking](#chunking)). The server speaks MCP over stdio and writes only protocol messages to stdout. Its logs go to stderr. It also works from code: `startMcpServer({ documents, llm, embedder })` takes the same options.
+
+## Use with LangChain, AI SDK, LlamaIndex and Mastra
+
+Keep your framework; let ragforge do the retrieval. Each adapter is a subpath export that loads its framework only when you use it, so install the framework yourself. `rf.retrieve(query)` underneath runs ragforge's routing (or your [tuned config](#tune-the-whole-setup)), query rewriting, hybrid search and reranking, and returns the passages without writing an answer, so your framework writes it.
+
+```js
+const rf = createRagforge({ config: 'ragforge.config.json' });
+await rf.index(await loadDocuments('./docs'), { dir: '.ragforge/index' });
+```
+
+**LangChain** (`npm i @langchain/core`). A real `BaseRetriever`: use it with `.invoke()`, `.pipe()`, `.batch()` and retrieval chains.
+
+```js
+const { createRagforgeRetriever } = require('ragforge/langchain');
+const retriever = createRagforgeRetriever(rf, { topK: 5 });
+const docs = await retriever.invoke('How long do refunds take?');
+// [Document { id: 'docs/billing.md#3', pageContent: '...', metadata: { ref, score, technique } }]
+```
+
+**Vercel AI SDK** (`npm i ai`, v7). A tool the model calls when it needs the docs, or middleware that adds the passages to every call:
+
+```js
+const { createRagforgeTool, createRagforgeMiddleware } = require('ragforge/ai-sdk');
+const { generateText, wrapLanguageModel, stepCountIs } = require('ai');
+
+// The model decides when to search
+await generateText({ model, tools: { searchDocs: createRagforgeTool(rf) }, stopWhen: stepCountIs(3), prompt });
+
+// Every call answers from the docs, with [n] citations
+const docsModel = wrapLanguageModel({ model, middleware: createRagforgeMiddleware(rf, { onSources: ({ sources }) => show(sources) }) });
+```
+
+The middleware retrieves for the last user message and appends numbered passages to the system prompt (adding one if there is none), so it works with every provider.
+
+**LlamaIndex.TS** (`npm i @llamaindex/core`, included in `llamaindex`). A real `BaseRetriever` returning `TextNode`s with scores, for query engines and agents:
+
+```js
+const { createRagforgeRetriever } = require('ragforge/llamaindex');
+const nodes = await createRagforgeRetriever(rf).retrieve({ query: 'How long do refunds take?' });
+```
+
+**Mastra** (`npm i @mastra/core`). A tool for agents and workflows, with a plain JSON schema (no schema library needed):
+
+```js
+const { createRagforgeTool } = require('ragforge/mastra');
+const agent = new Agent({ id: 'support', name: 'support', instructions: 'Answer from the docs.', model, tools: { searchDocs: createRagforgeTool(rf) } });
+```
+
+Every adapter takes `topK` and `technique` (e.g. `technique: 'hybrid'` to skip routing).
+
+**Score the retriever you have now.** `evaluate()` scores your framework's own retriever next to ragforge's techniques, on the same questions, so you can see what switching would change:
+
+```js
+const { fromLangChainRetriever } = require('ragforge/langchain');  // or fromLlamaIndexRetriever from ragforge/llamaindex
+const result = await rf.evaluate({
+  documents,
+  retrievers: { mine: fromLangChainRetriever(myRetriever) },        // any async (query, topK) => passages works too
+});
+```
+
+Your retriever shows up on the scoreboard as `mine (yours)`. It searches its own index, so its passages are matched on their text, not on chunk ids. Its cost isn't visible to ragforge, and it is never the recommendation, since `auto()` can't run it.
+
+The AI SDK (v7) and parts of Mastra are ES modules. The adapters load them with `require()`, which works on Node.js 20.19+ and 22.12+, and those frameworks need Node 22 anyway.
 
 ## Auto-routing
 
@@ -472,6 +722,7 @@ await rf.auto(query, { rules: { short: 'hyde+stepback' } });  // change a catego
 |---|---|---|---|
 | **Hybrid** | Adds a BM25 keyword search for the query and fuses it with vector search | Error codes, names, IDs, exact terms | 0 |
 | **Rerank** | Retrieves 20 candidates, then a reranker picks the best *k* | The right chunk is retrieved but ranked too low | 0 (1 with the `llm` reranker), plus 1 reranker call |
+| **Contextual** | Searches chunks indexed with an LLM-written context line ([more](#contextual-retrieval)) | Chunks that don't name their subject | 0 per query, 1 per chunk at index time |
 | **HyDE** | Writes a hypothetical answer and searches with *that* | Short or vague queries | 1, or 2 with a vector store |
 | **Step-Back** | Rewrites the question into a broader, principle-level one | Specific *why/how* questions | 2 |
 | **Fan-Out** | Splits the query into 3 sub-questions and searches each | Comparisons, multi-part questions | 2 |
@@ -771,6 +1022,7 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | `defaults` | LLM options | `{ temperature: 0.7, maxTokens: 500 }` |
 | `debug` | `boolean` | `false` |
 | `logger` | `{ info, error }` | silent |
+| `config` | `ragforge.config.json` object or path, from `ragforge tune` | none |
 
 </details>
 
@@ -780,7 +1032,13 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 | Method | Returns |
 |---|---|
 | `evaluate(options)` | Scoreboard, recommendation and per-question results |
+| `tune(options)` | Every trial, the best setup, the Pareto front and `config` (write it to `ragforge.config.json`) |
+| `index(documents, options)` | Builds and uses an in-memory index, chunked the tuned way: `{ count, contextual, store }`. With `{ dir }` it is saved and updated incrementally: `{ changes, embedded, reused, rebuilt, ... }` |
+| `loadIndex(dir)` | Uses a saved index without the documents: `{ count, store, manifest }` |
+| `contextualize(chunks, documents, options)` | `{ chunks, estimate, cached, failed, errors, stats }`; each chunk gains `context` and `indexText` |
+| `estimateContextCost(chunks, documents, options)` | `{ chunks, cached, calls, inputTokens, outputTokens, model, costUSD }` |
 | `auto(query, options)` | Pipeline result plus `route` |
+| `retrieve(query, options)` | Like `auto()` without the answer: `{ sources, route, translation, retrieved, stats }`. `technique` pins a technique |
 | `route(query, options)` | `{ technique, category, classifier, decidedBy, reason }` |
 | `ragPipeline(query, options)` | `{ query, translation, retrieved, sources, citations, answer, stats }` |
 | `translate(query, options)` | Technique outputs and retrieval sub-queries |
@@ -792,14 +1050,18 @@ Costs use a built-in price table for common OpenAI models (`DEFAULT_PRICING`, US
 
 **Pipeline options:** `techniques`, `topK` (5), `rerankK` (20), `hybrid` (false), `rerank` (false), `citations` (true), `techniqueOptions`, `finalModelOptions`, `onStats`.
 **Route options:** `router` (`'rules'` \| `'llm'`), `from`, `techniques`, `rules`, `routerOptions`, `minSamples` (3), `minImprovement` (0.05).
-**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `onProgress`.
+**Evaluate options:** `documents`, `questions`, `numQuestions` (10), `questionStyles`, `techniques`, `topK` (5), `rerankCandidates` (20), `chunkSize` (800), `chunkStrategy` (`'paragraph'`), `chunkOverlap` (0), `concurrency` (4), `minImprovement` (0.05), `llmOptions`, `answers` (false), `judgeOptions`, `contextual` (false), `contextOptions`, `onProgress`.
+**Context options:** `model`, `llmOptions`, `cache`, `budgetUSD`, `maxDocumentChars` (24000), `concurrency` (4), `onEstimate`, `onProgress`.
+**Evaluate `retrievers`:** `{ name: async (query, topK) => passages }`, scored next to the techniques (see [frameworks](#use-with-langchain-ai-sdk-llamaindex-and-mastra)).
+**Index options:** `dir`, `chunkSize`, `chunkStrategy`, `chunkOverlap`, `contextual`, `contextOptions`, `concurrency` (4), `onProgress`.
+**Tune options:** `documents`, `questions`, `numQuestions` (20), `chunkStrategies`, `chunkSizes`, `embeddingModels`, `techniques`, `contextual`, `contextOptions`, `topSetups` (3), `budgetUSD` (0.5, `null` for none), `topK` (5), `rerankCandidates` (20), `minImprovement` (0.05), `concurrency` (4), `llmOptions`, `onPlan`, `onProgress`.
 
 </details>
 
 <details>
 <summary><b>Other exports</b></summary>
 
-`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`.
+`createOpenAIProvider`, `createOllamaProvider`, `createMemoryCache`, `createFileCache`, `createLLMReranker`, `createCohereReranker`, `createJinaReranker`, `createMemoryVectorStore`, `createBM25Index`, `loadDocuments`, `htmlToText`, `chunkText`, `chunkDocuments`, `CHUNK_STRATEGIES`, `classifyQuery`, `formatTable`, `renderHtmlReport`, `renderMarkdownReport`, `compareEvals`, `formatComparison`, `JUDGE_VERSION`, `createTraceLogger`, `readTraces`, `DEFAULT_PRICING`, `DEFAULT_RULES`, `loadConfig`, `formatTuneTable`, `renderTuneHtml`, `startUiServer`.
 
 The top-level `hyde`, `cot`, `stepback`, `fanout`, `ragPipeline`, `auto`, `callLLM`, `getEmbedding`, `setVectorClient` and `setOpenAIClient` use a default OpenAI instance, as in 1.x.
 
