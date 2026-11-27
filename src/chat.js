@@ -1,32 +1,10 @@
 // `ragforge chat`: ask questions about a folder of documents from the terminal
 const readline = require("readline");
-const { chunkDocuments } = require("./eval/chunk");
-const { createMemoryVectorStore } = require("./eval/memoryVectorStore");
-const { mapLimit } = require("./core/limit");
+const { indexDocuments } = require("./indexing/memoryIndex");
 
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 const ms = (x) => (x >= 1000 ? `${(x / 1000).toFixed(1)}s` : `${x}ms`);
 const usd = (x) => (x === null || x === undefined ? "cost n/a" : x === 0 ? "$0" : x < 0.0001 ? "<$0.0001" : `$${x.toFixed(4)}`);
-
-/**
- * indexDocuments
- * Chunks and embeds the documents into an in-memory store and attaches it to the instance.
- * @returns {Promise<number>} number of passages indexed
- */
-async function indexDocuments(rf, documents, { chunkSize = 800, concurrency = 4, onProgress = () => {} } = {}) {
-  const chunks = chunkDocuments(documents, { size: chunkSize });
-  if (!chunks.length) throw new Error("the documents contained no text");
-  let done = 0;
-  const vectors = await mapLimit(chunks, concurrency * 2, async (c) => {
-    const vector = await rf.getEmbedding(c.content);
-    onProgress({ done: ++done, total: chunks.length });
-    return vector;
-  });
-  const store = createMemoryVectorStore();
-  store.add(chunks.map((c, i) => ({ id: c.id, content: c.content, vector: vectors[i], metadata: { docId: c.docId } })));
-  rf.setVectorStore(store);
-  return chunks.length;
-}
 
 /**
  * runChat
@@ -36,12 +14,12 @@ async function indexDocuments(rf, documents, { chunkSize = 800, concurrency = 4,
  *
  * @param {object} options
  * @param {object} options.rf - ragforge instance with a vector store attached
- * @param {number} [options.topK=5]
+ * @param {number} [options.topK] - Passages per answer (default: the config's, or 5)
  * @param {NodeJS.ReadableStream} options.input
  * @param {{ write(text: string): void }} options.output
  * @returns {Promise<number>} questions answered
  */
-async function runChat({ rf, topK = 5, input, output }) {
+async function runChat({ rf, topK, input, output }) {
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
   const say = (text = "") => output.write(`${text}\n`);
   let answered = 0;
@@ -56,7 +34,9 @@ async function runChat({ rf, topK = 5, input, output }) {
         continue;
       }
       try {
-        const result = await rf.auto(question, { stream: true, hybrid: true, topK });
+        // A tuned instance (createRagforge({ config })) searches the way its config says;
+        // otherwise keyword search is added, since the in-memory index supports it
+        const result = await rf.auto(question, { stream: true, ...(topK && { topK }), ...(rf.config ? {} : { hybrid: true }) });
         say();
         for await (const token of result.stream) output.write(token);
         const [citations, stats] = await Promise.all([result.citations, result.stats]);
@@ -67,7 +47,7 @@ async function runChat({ rf, topK = 5, input, output }) {
         if (shown.length) {
           say();
           say(citations.length ? "Sources:" : "Sources (none cited):");
-          for (const s of shown) say(`  [${s.ref}] ${s.id ?? "passage"}  ${clip(s.content, 110)}`);
+          for (const s of shown) say(`  [${s.ref}] ${s.id ?? "passage"}  ${clip(s.content.replace(/\s+/g, " "), 110)}`);
         }
         say(`(${result.route.technique} · ${stats.llmCalls} LLM call${stats.llmCalls === 1 ? "" : "s"} · ${usd(stats.costUSD)} · ${ms(stats.latencyMs)})`);
         answered++;

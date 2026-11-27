@@ -18,10 +18,12 @@ function createMemoryVectorStore() {
 
   return {
     /**
-     * @param {Array<{id: string, content: string, vector: number[], metadata?: object}>} entries
+     * @param {Array<{id: string, content: string, vector: number[], indexText?: string, metadata?: object}>} entries
+     *   With contextual retrieval, `vector` embeds `indexText` and keyword search
+     *   matches it; results return `content` as it was
      */
     add(entries) {
-      for (const e of entries) items.push({ ...e, norm: norm(e.vector) });
+      for (const e of entries) items.push({ id: e.id, content: e.content, vector: e.vector, metadata: e.metadata, norm: norm(e.vector) });
       keywords.add(entries);
     },
 

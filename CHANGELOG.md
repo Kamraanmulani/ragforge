@@ -2,6 +2,78 @@
 
 All notable changes to ragforge are documented here. This project follows [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **`npx ragforge ui`.** A local dashboard of the eval runs, tune runs, trace logs, saved indexes and tuned configs in a folder (`--dir`) and below, with no account and nothing sent anywhere.
+  - Eval runs: the scoreboard, and every question with each technique's rank. Filter to misses or disagreements, and open a question to see the rewrites, the retrieved chunks and the graded answer.
+  - Compare two eval runs: deltas per technique, comparability warnings, a fail-on-drop check, and the questions whose rank changed.
+  - Tune runs: the cost/quality chart with the Pareto front, all trials, and the written config. Trace logs: the real queries with technique, latency, cost and the passages used.
+  - Saved indexes: their contents, and live search (keyword search needs no key; hybrid and vector search make one embedding call with the index's model).
+  - It listens on 127.0.0.1, refuses other Host names (DNS rebinding), reads only the result files it found, and accepts search requests only from the dashboard itself. It uses a strict Content-Security-Policy, and all file content is shown as text. Plain Node.js `http`, so there are no new dependencies.
+  - `startUiServer()` is exported.
+
+- **Framework adapters.** Use ragforge's retrieval inside the framework you already have. Each is a subpath export that loads its framework (an optional peer dependency) only when used:
+  - `ragforge/langchain`: `createRagforgeRetriever(rf)`, a real `BaseRetriever` returning LangChain `Document`s. It works with `.invoke()`, `.pipe()` and `.batch()`.
+  - `ragforge/ai-sdk`: `createRagforgeTool(rf)`, a tool the model calls, and `createRagforgeMiddleware(rf)`, which adds the retrieved passages, numbered, to the system prompt of every call. Built for AI SDK 7.
+  - `ragforge/llamaindex`: `createRagforgeRetriever(rf)`, a real `BaseRetriever` returning `TextNode`s with scores.
+  - `ragforge/mastra`: `createRagforgeTool(rf)`, a tool for Mastra agents and workflows, with a plain JSON schema.
+  - All take `topK` and `technique`. They are tested against the real packages, including a Mastra `Agent` calling the tool.
+- **`rf.retrieve(query)`.** Routes and retrieves like `auto()` but writes no answer, for frameworks that generate it themselves. `auto()` and `retrieve()` take `technique` to skip routing (`route.decidedBy: 'option'`).
+- **Score your own retriever.** `evaluate({ retrievers: { mine: fn } })` scores any `async (query, topK) => passages` next to the techniques, matched on passage text. `fromLangChainRetriever()` and `fromLlamaIndexRetriever()` wrap existing retrievers. They show as `(yours)` on the scoreboard and are never the recommendation.
+
+- **`npx ragforge index`.** Saves the index of your documents in `.ragforge/index` (`--index <dir>`) and keeps it up to date. Only new and edited files are chunked and embedded again, and deleted files are removed.
+  - A content-hash manifest tells which documents changed. Inside an edited document, a chunk whose text didn't change keeps its vector, so a one-paragraph edit re-embeds about one chunk. With `--contextual`, only changed documents get new context lines.
+  - Changing the chunking, embedding model or contextual settings rebuilds the index, and the summary says why. Vectors from the same model are reused where the text matches.
+  - Saves go through temporary files, and the two index files are checked against each other, so an interrupted save is rebuilt instead of half-used. A damaged index is rebuilt too.
+  - `--watch` keeps running and updates the index when a file changes. Hidden folders (such as `.ragforge` itself) and `node_modules` are ignored, and it works on Node 18 on Linux, which lacks recursive file watching.
+- `chat --index` and `mcp --index` start from the saved index. `mcp --watch` updates it while serving; searches use the previous index until the new one is ready.
+- `rf.index(documents, { dir })` does the same in code and returns what changed. `rf.loadIndex(dir)` serves a saved index without reading the documents, and refuses one built with another embedding model.
+
+- **`npx ragforge tune`.** Finds the retrieval setup that works best on your documents: chunking strategy × chunk size × embedding model × query technique (hybrid, HyDE, Step-Back, Fan-Out, rerank, contextual), within a USD budget (`--budget`, default $0.50). It writes the winner to `ragforge.config.json`.
+  - Successive halving: every index setup is screened with plain and hybrid search, then the best few (`--top-setups`) also try the techniques that add LLM calls, reranking or context lines.
+  - The plan and its estimated cost are printed before anything is spent. Every step is estimated and checked against the budget, steps that don't fit are skipped and listed, and the run won't start if screening alone is over budget.
+  - Each distinct API call is made once: a chunk embedded for two setups, or a HyDE draft used by two techniques, is paid for once. Cost per query is still reported as production would pay.
+  - Questions are generated once from short passages and matched by their text, so every setup is scored on the same questions.
+  - The pick needs a clear win, since the best of many noisy scores is often just lucky. A setup replaces the default only when, question by question, it ranks the right chunk higher on at least 2 more questions than it ranks it lower (`minGainQuestions`). A materially cheaper setup that is about as good is preferred. A technique that adds cost must also beat the chosen free setup by 5 points. Ties keep the default.
+  - Reused calls wait as long as the original call took, so the latency reported for every trial is real.
+  - The report lists the best trials, what changed from the default and the spend. `--html` adds a chart of hit rate against cost per query that marks the Pareto front. Tables show the average chunk length, since bigger chunks send more text to the LLM.
+  - `rf.tune(options)` does the same in code. `formatTuneTable()`, `renderTuneHtml()` and `loadConfig()` are exported.
+- **`createRagforge({ config })`.** Loads `ragforge.config.json` (object or path): providers, models, `topK`, and the technique every `auto()` call uses (`route.decidedBy: 'config'`). Options you pass still win.
+- **`rf.index(documents)`.** Builds and uses an in-memory index (vectors and BM25), chunked the way the config says and with context lines when it is contextual. `rf.config` is the loaded config.
+- `chat` and `mcp` take `--config ragforge.config.json`.
+
+### Fixed
+
+- `ragforge tune` could pick a different winner from run to run when two trials tied exactly (e.g. `baseline` and `hybrid` on the same setup): the tie was decided by sub-millisecond latency. Exact ties now go to the simpler technique.
+
+- `mcp --top-k` now sets the default number of passages per `search_docs` and `ask` call. The help described it, but the server ignored it.
+- `chat` prints each source on one line, including chunks that start with a heading trail.
+
+- **Contextual retrieval.** At index time, an LLM writes a line that places each chunk in its document. The line is embedded and keyword-indexed with the chunk, while sources and answers keep the chunk as written.
+  - `npx ragforge eval --contextual` scores two new techniques, `contextual` and `contextual+hybrid`, next to the others. `contextual` combines with the rest (`contextual+rerank`, `contextual+hyde`). In code: `evaluate({ contextual: true })`, or list them in `techniques`.
+  - The cost is estimated and printed before any line is written. `--context-budget <usd>` (`contextOptions.budgetUSD`) stops when the estimate is higher, or when the model has no known price. `--context-model` picks the model that writes the lines.
+  - Lines are cached in `.ragforge/context-cache.json` (`--context-cache <file>`, or `none`) and reused while the chunk, its document and the model are unchanged. Documents over 24,000 characters are cut to a window around each chunk.
+  - The scoreboard and HTML report show the context lines as a one-time index cost, apart from cost per query. The result has `contextual: { model, chunks, contextualized, cached, failed, estimate, usage }`. A contextual technique has to beat plain search by `minImprovement` to be recommended, like other techniques that add LLM calls.
+  - A chunk whose call fails is indexed without context and counted in `failed`. If every call fails, the run stops with the error.
+  - `npx ragforge chat --contextual` and `npx ragforge mcp --provider <name> --contextual` index with context lines too.
+  - `rf.contextualize(chunks, documents, options)` returns chunks with `context` and `indexText` for your own index. `rf.estimateContextCost()` gives the estimate without calling the LLM.
+- `createFileCache(file)`: a `{ get, set }` cache kept in a JSON file, so entries survive between runs.
+- `createMemoryVectorStore()` and `createBM25Index()` accept `indexText` on an entry: it is searched, and results return `content`.
+
+- **Chunking strategies.** `--chunk-strategy` (`chunkStrategy` in `evaluate()`, `chunkStrategy` in `startMcpServer()`) picks how documents are split, in `eval`, `chat`, `mcp` and `label`:
+  - `paragraph`: packs whole paragraphs. The default, and unchanged, so existing chunk ids and CI baselines don't move.
+  - `fixed`: windows of characters cut at a word.
+  - `sentence`: packs whole sentences, never cutting one. Version numbers, file names and abbreviations such as "e.g." don't end a sentence.
+  - `markdown-heading`: one section per chunk, starting with its heading trail (`Setup > Windows`). `#` lines inside code fences are not headings.
+  - `semantic`: splits where the topic shifts, measured by embedding similarity between sentences. Costs one embedding call per sentence, counted in the eval's setup cost.
+  - `code`: splits source files by top-level declaration, keeping comments, docstrings and decorators with the code below them. Other documents are split by paragraph. With this strategy, `--docs` folders also yield source files (`.js`, `.ts`, `.py`, `.go`, `.rs`, `.java` and more), skipping `dist`, `build`, `vendor` and minified files.
+- `--chunk-overlap <n>` (`chunkOverlap`) repeats text between chunks, for the `fixed` and `sentence` strategies.
+- The eval result has `chunking: { strategy, size, overlap }`, and the scoreboard shows it next to the chunk count.
+- Questions replayed with `--questions-file` (and `--from-logs` labels) find their passage under any strategy: `expectedText` matching now ignores Markdown heading marks, heading-trail separators and differences in whitespace, and generated questions and labels remember a `markdown-heading` passage without its trail.
+- `chunkDocuments()` and `CHUNK_STRATEGIES` are exported. `chunkText()` takes `strategy` and `overlap`. `loadDocuments()` takes `code: true`.
+
 ## [2.3.1] - 2026-11-21
 
 ### Fixed

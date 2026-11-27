@@ -8,9 +8,24 @@ const { hypotheticalDocument } = require("../techniques/hyde");
 const { cot } = require("../techniques/cot");
 const { generalQuestion } = require("../techniques/stepback");
 const { subQuestions } = require("../techniques/fanout");
-const { chunkDocuments } = require("./chunk");
+const { chunkDocuments, checkChunking, passageText } = require("./chunk");
 const { createMemoryVectorStore } = require("./memoryVectorStore");
 const { judgeAnswer, summarizeAnswers, JUDGE_VERSION } = require("./judge");
+const { contextualize } = require("../indexing/contextual");
+
+// The first words of a passage, matched as text (same as label.js; kept here to avoid a cycle)
+const openingWords = (text, count = 12) => String(text).trim().split(/\s+/).slice(0, count).join(" ");
+
+/**
+ * externalItem
+ * A result from your own retriever, whatever its shape: a string, { content },
+ * LangChain's { pageContent }, or { text }. Becomes { id, content, score, metadata }.
+ */
+function externalItem(item) {
+  if (typeof item === "string") return { id: null, content: item, score: null, metadata: null };
+  const content = item?.content ?? item?.pageContent ?? item?.text ?? "";
+  return { id: item?.id ?? item?.metadata?.id ?? null, content: String(content), score: typeof item?.score === "number" ? item.score : null, metadata: item?.metadata ?? null };
+}
 
 const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 
@@ -18,10 +33,12 @@ const DEFAULT_TECHNIQUES = ["baseline", "hybrid", "hyde", "stepback", "fanout"];
 // Multiple texts are fused with RRF, the same way the pipeline does it.
 // "hybrid" also runs a keyword (BM25) search for the original question.
 // "rerank" retrieves more candidates and lets the reranker pick the top k.
+// "contextual" searches a second index whose chunks carry an LLM-written context line.
 const QUERY_BUILDERS = {
   baseline: async (ctx, q) => [q],
   hybrid: async (ctx, q) => [q],
   rerank: async (ctx, q) => [q],
+  contextual: async (ctx, q) => [q],
   hyde: async (ctx, q, o) => [await hypotheticalDocument(ctx, q, o)],
   cot: async (ctx, q, o) => [(await cot(ctx, q, o)).refinedQuery],
   stepback: async (ctx, q, o) => [q, await generalQuestion(ctx, q, o)],
@@ -49,9 +66,14 @@ function usesRerank(technique) {
   return parseTechnique(technique).includes("rerank");
 }
 
-// Costs more than plain search: extra LLM calls or a reranker call
+function usesContextual(technique) {
+  return parseTechnique(technique).includes("contextual");
+}
+
+// Costs more than plain search: extra LLM calls, a reranker call, or (contextual)
+// an LLM call per chunk at index time
 function addsCost(row, baseline) {
-  return row.avgLlmCalls > baseline.avgLlmCalls || usesRerank(row.technique);
+  return row.avgLlmCalls > baseline.avgLlmCalls || usesRerank(row.technique) || usesContextual(row.technique);
 }
 
 async function buildQueries(ctx, technique, question, llmOptions) {
@@ -111,7 +133,7 @@ async function generateQuestions(ctx, chunks, count, llmOptions, concurrency, on
       const question = cleanQuestion(await ctx.chat(questionPrompt(style, chunk), { temperature: 0.3, max_tokens: 100, ...llmOptions }));
       if (question && !VAGUE_REFERENCE.test(question)) {
         onProgress({ phase: "questions", done: ++done, total: n });
-        return { question, style, expectedId: chunk.id, source: chunk.content };
+        return { question, style, expectedId: chunk.id, source: passageText(chunk) };
       }
       chunk = spares.shift();
     }
@@ -134,9 +156,24 @@ function resultKey(item) {
   return item && typeof item === "object" && item.id != null ? String(item.id) : extractText(item);
 }
 
+/**
+ * matchText
+ * Text compared for expectedText matches: lowercased, whitespace collapsed, and
+ * without Markdown heading marks ("## ") or heading-trail separators (" > "), so a
+ * passage still matches after it moved to a chunk made by another strategy.
+ */
+function matchText(text) {
+  return String(text)
+    .toLowerCase()
+    .replace(/(^|\s)#{1,6}(?=\s)/g, " ")
+    .replace(/\s>\s/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isMatch(item, key, q) {
   if (q.expectedId != null) return key === String(q.expectedId);
-  return extractText(item).toLowerCase().includes(String(q.expectedText).toLowerCase());
+  return matchText(extractText(item)).includes(matchText(q.expectedText));
 }
 
 function mean(values) {
@@ -225,12 +262,21 @@ function recommend(ranked, topK, minImprovement) {
  * @param {number} [options.topK=5]
  * @param {number} [options.rerankCandidates=20] - Candidates retrieved for rerank techniques
  * @param {number} [options.chunkSize=800]
+ * @param {string} [options.chunkStrategy="paragraph"] - paragraph, fixed, sentence, markdown-heading, semantic or code
+ * @param {number} [options.chunkOverlap=0] - Characters repeated between chunks (fixed and sentence)
  * @param {number} [options.concurrency=4]
  * @param {number} [options.minImprovement=0.05] - Hit-rate gain needed to recommend over baseline
  * @param {object} [options.llmOptions] - LLM options for techniques, question generation and answers
  * @param {boolean} [options.answers=false] - Also write an answer from each technique's passages and
  *   grade it with an LLM judge: faithfulness, answer relevance, context recall, citation accuracy
  * @param {object} [options.judgeOptions] - LLM options for the judge, e.g. { model } (default: llmOptions at temperature 0)
+ * @param {boolean} [options.contextual=false] - Add "contextual" and "contextual+hybrid" to the default techniques
+ * @param {object} [options.contextOptions] - For contextual techniques: { model, cache, budgetUSD,
+ *   maxDocumentChars, llmOptions, onEstimate }, see src/indexing/contextual.js
+ * @param {object} [options.retrievers] - Your own retrievers to score next to the techniques, e.g.
+ *   { langchain: fromLangChainRetriever(retriever) }: name -> async (query, topK) => results. They
+ *   search their own index, so they are matched on the passage text, not chunk ids. Their cost isn't
+ *   known, and they are never the recommendation (auto() can't route to them)
  * @param {function} [options.onProgress] - ({ phase, done, total }) => void
  */
 async function evaluate(config, options = {}) {
@@ -241,24 +287,47 @@ async function evaluate(config, options = {}) {
     topK = 5,
     rerankCandidates = 20,
     chunkSize = 800,
+    chunkStrategy = "paragraph",
+    chunkOverlap = 0,
     concurrency = 4,
     minImprovement = 0.05,
     llmOptions = {},
     answers = false,
     judgeOptions = {},
+    contextOptions = {},
     onProgress = () => {},
   } = options;
 
   const hasDocuments = Boolean(documents && documents.length);
   // Hybrid needs keyword search: the in-memory store has it, your own store needs searchText()
   const textSearch = hasDocuments || typeof config.vectorStore?.searchText === "function";
-  const defaults = config.reranker ? [...DEFAULT_TECHNIQUES, "rerank", "hybrid+rerank"] : DEFAULT_TECHNIQUES;
+  const defaults = [
+    ...DEFAULT_TECHNIQUES,
+    ...(config.reranker ? ["rerank", "hybrid+rerank"] : []),
+    ...(options.contextual ? ["contextual", "contextual+hybrid"] : []),
+  ];
   const techniques = options.techniques ?? defaults.filter((t) => textSearch || !usesHybrid(t));
+  if (options.contextual && options.techniques && !options.techniques.some(usesContextual)) {
+    throw new Error('[ragforge] evaluate: `contextual` adds contextual techniques to the defaults, but `techniques` lists none. Add e.g. "contextual" or "contextual+hybrid" to techniques.');
+  }
 
   // Validate everything before spending any API calls
   techniques.forEach(parseTechnique);
+  const retrievers = Object.entries(options.retrievers ?? {});
+  for (const [name, fn] of retrievers) {
+    if (typeof fn !== "function") throw new Error(`[ragforge] evaluate: retriever "${name}" must be a function (query, topK) => results`);
+    if (QUERY_BUILDERS[name.split("+")[0]] || techniques.includes(name)) throw new Error(`[ragforge] evaluate: retriever name "${name}" is taken by a technique; pick another name`);
+  }
+  const chunking = checkChunking({ strategy: chunkStrategy, size: chunkSize, overlap: chunkOverlap });
   if (!textSearch && techniques.some(usesHybrid)) {
     throw new Error("[ragforge] evaluate: hybrid techniques need keyword search. Pass `documents`, or add `searchText(text, topK)` to your vector store.");
+  }
+  const contextual = techniques.some(usesContextual);
+  if (contextual && !hasDocuments) {
+    throw new Error("[ragforge] evaluate: contextual techniques index `documents` a second time with context lines, so they need `documents`. For your own vector store, index it with rf.contextualize().");
+  }
+  if (contextual && config.llm.chatModel === null && !contextOptions.model) {
+    throw new Error(`[ragforge] evaluate: contextual techniques need a chat model to write context lines, and the ${config.llm.name} provider has none.`);
   }
   if (!config.reranker && techniques.some(usesRerank)) {
     throw new Error('[ragforge] evaluate: rerank techniques need a reranker, e.g. createRagforge({ reranker: "cohere" })');
@@ -280,6 +349,11 @@ async function evaluate(config, options = {}) {
     if (!q || !q.question || (q.expectedId == null && q.expectedText == null)) {
       throw new Error("[ragforge] evaluate: each question needs `question` and `expectedId` or `expectedText`");
     }
+    // Your own retrievers search their own index, so chunk ids mean nothing to them: match on text.
+    // (Generated questions always carry their passage, so this only concerns questions you give)
+    if (retrievers.length && q.expectedText == null && typeof q.source !== "string") {
+      throw new Error("[ragforge] evaluate: your own retrievers are matched on the passage text, so each question needs `expectedText`");
+    }
   });
 
   const setupTracker = createTracker(config.pricing);
@@ -288,9 +362,34 @@ async function evaluate(config, options = {}) {
   // 1. Corpus: index documents in memory, or use the instance's vector store
   let store;
   let chunks = [];
+  let contextStore = null;
+  let contextRun = null;
+  // Context lines and their embeddings are a one-time index cost, reported apart from setup
+  const contextTracker = createTracker(config.pricing);
   if (hasDocuments) {
-    chunks = chunkDocuments(documents, { size: chunkSize });
+    // Semantic chunking embeds every sentence; that usage counts toward the setup cost
+    chunks = await chunkDocuments(documents, { ...chunking, concurrency: concurrency * 2, embed: (text) => setupCtx.embed(text) });
     if (!chunks.length) throw new Error("[ragforge] evaluate: documents contained no text");
+
+    // Contextual: write the context lines first, so the estimate and budget check come before most spending
+    if (contextual) {
+      const contextCtx = createCallContext(config, contextTracker);
+      contextRun = await contextualize(contextCtx, config, chunks, documents, {
+        llmOptions,
+        ...contextOptions,
+        concurrency,
+        onProgress,
+      });
+      contextStore = createMemoryVectorStore();
+      let embedded = 0;
+      const contextVectors = await mapLimit(contextRun.chunks, concurrency * 2, async (c) => {
+        const v = await contextCtx.embed(c.indexText);
+        onProgress({ phase: "context-index", done: ++embedded, total: contextRun.chunks.length });
+        return v;
+      });
+      contextStore.add(contextRun.chunks.map((c, i) => ({ id: c.id, content: c.content, indexText: c.indexText, vector: contextVectors[i] })));
+    }
+
     store = createMemoryVectorStore();
     let done = 0;
     const vectors = await mapLimit(chunks, concurrency * 2, async (c) => {
@@ -312,10 +411,31 @@ async function evaluate(config, options = {}) {
   }
 
   // 3. Run every technique on every question
-  const tasks = questions.flatMap((q, qi) => techniques.map((technique) => ({ q, qi, technique })));
+  const tasks = questions.flatMap((q, qi) => [
+    ...techniques.map((technique) => ({ q, qi, technique })),
+    ...retrievers.map(([name, fn]) => ({ q, qi, technique: name, external: fn })),
+  ]);
   let done = 0;
-  const runs = await mapLimit(tasks, concurrency, async ({ q, qi, technique }) => {
-    const ctx = createCallContext({ ...config, vectorStore: store });
+  const runs = await mapLimit(tasks, concurrency, async ({ q, qi, technique, external }) => {
+    if (external) {
+      const run = { technique, questionIndex: qi, rank: 0, queries: [q.question], retrieved: [], external: true };
+      const started = Date.now();
+      try {
+        const items = ((await external(q.question, topK)) ?? []).map(externalItem).slice(0, topK);
+        const textQuestion = { expectedText: q.expectedText ?? openingWords(q.source) };
+        run.rank = items.findIndex((item) => isMatch(item, null, textQuestion)) + 1;
+        run.retrieved = items.map((item, i) => item.id ?? `#${i + 1}`);
+        run.passages = items.map((item) => item.content);
+      } catch (err) {
+        run.error = err.message || String(err);
+      }
+      // What your retriever spends isn't visible to ragforge
+      run.stats = { llmCalls: 0, embeddingCalls: 0, rerankCalls: 0, cacheHits: 0, inputTokens: 0, outputTokens: 0, costUSD: null, latencyMs: Date.now() - started };
+      onProgress({ phase: "run", done: ++done, total: tasks.length });
+      return run;
+    }
+    const searched = usesContextual(technique) ? contextStore : store;
+    const ctx = createCallContext({ ...config, vectorStore: searched });
     const run = { technique, questionIndex: qi, rank: 0, queries: [], retrieved: [] };
     try {
       run.queries = await buildQueries(ctx, technique, q.question, llmOptions);
@@ -329,7 +449,7 @@ async function evaluate(config, options = {}) {
       const rerank = usesRerank(technique);
       const depth = rerank ? Math.max(rerankCandidates, topK) : topK;
       const searches = run.queries.map(async (text) => toKeys(await ctx.queryVectors(await ctx.embed(text), depth)));
-      if (usesHybrid(technique)) searches.push(store.searchText(q.question, depth).then((results) => toKeys(results ?? [])));
+      if (usesHybrid(technique)) searches.push(searched.searchText(q.question, depth).then((results) => toKeys(results ?? [])));
       const lists = await Promise.all(searches);
       let ranked = (lists.length === 1 ? lists[0] : rrf(lists)).slice(0, depth);
       if (rerank) {
@@ -379,19 +499,24 @@ async function evaluate(config, options = {}) {
   }
 
   // 5. Score
-  const rows = techniques.map((t) => {
+  const rows = [...techniques, ...retrievers.map(([name]) => name)].map((t) => {
     const own = runs.filter((r) => r.technique === t);
     const row = summarize(t, own);
+    if (retrievers.some(([name]) => name === t)) row.external = true;
     if (answers) row.answers = summarizeAnswers(own.filter((r) => r.judged).map((r) => r.judged));
     return row;
   });
   const ranked = rankRows(rows);
+  // Recommend only what auto() can run: your own retrievers are compared, not routed to
+  const rankedTechniques = ranked.filter((r) => !r.external);
   const answerUsage = answerTracker.snapshot();
 
   return {
     topK,
     questionCount: questions.length,
     chunkCount: chunks.length || null,
+    // How the documents were split; null when evaluating your own vector store
+    chunking: hasDocuments ? chunking : null,
     techniques,
     provider: {
       llm: config.llm.name,
@@ -400,10 +525,24 @@ async function evaluate(config, options = {}) {
       embeddingModel: config.embedder.embeddingModel,
     },
     setup: setupTracker.snapshot(),
+    ...(contextRun && {
+      contextual: {
+        model: contextRun.estimate.model,
+        chunks: contextRun.chunks.length,
+        // Chunks that got a context line (the rest are indexed as they are)
+        contextualized: contextRun.chunks.filter((c) => c.context).length,
+        cached: contextRun.cached,
+        failed: contextRun.failed,
+        estimate: contextRun.estimate,
+        // Context lines plus embedding the contextual chunks: a one-time index cost
+        usage: contextTracker.snapshot(),
+      },
+    }),
     results: rows,
     ranking: ranked.map((r) => r.technique),
-    best: ranked[0].technique,
-    recommendation: recommend(ranked, topK, minImprovement),
+    best: rankedTechniques[0].technique,
+    recommendation: recommend(rankedTechniques, topK, minImprovement),
+    ...(retrievers.length && { retrievers: retrievers.map(([name]) => name) }),
     ...(answers && {
       answers: {
         judgeVersion: JUDGE_VERSION,
@@ -439,4 +578,4 @@ async function evaluate(config, options = {}) {
   };
 }
 
-module.exports = { evaluate, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, generateQuestions, recommend, rankRows };
+module.exports = { evaluate, matchText, DEFAULT_TECHNIQUES, DEFAULT_QUESTION_STYLES, parseTechnique, usesHybrid, usesRerank, usesContextual, addsCost, generateQuestions, recommend, rankRows };

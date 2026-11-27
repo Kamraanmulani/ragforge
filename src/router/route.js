@@ -1,6 +1,6 @@
 // Picks a retrieval technique per query: rules, an LLM classifier, or eval results
 const { classifyQuery, CATEGORIES, DEFAULT_RULES, REASONS } = require("./classify");
-const { parseTechnique, usesHybrid, usesRerank, DEFAULT_TECHNIQUES } = require("../eval/evaluate");
+const { parseTechnique, usesHybrid, usesRerank, usesContextual, DEFAULT_TECHNIQUES } = require("../eval/evaluate");
 
 /**
  * classifyWithLLM
@@ -63,8 +63,8 @@ function learnFromEval(evalResult, { minSamples = 3, minImprovement = 0.05 } = {
       .sort((a, b) => b.hitRate - a.hitRate || (llmCalls[a.technique] ?? 0) - (llmCalls[b.technique] ?? 0));
     let best = scored[0];
     const baseline = scored.find((s) => s.technique === "baseline");
-    // Like the overall recommendation: only techniques that add cost (LLM or rerank calls) must clear minImprovement
-    const extraCost = (llmCalls[best.technique] ?? 0) > (llmCalls.baseline ?? 0) || usesRerank(best.technique);
+    // Like the overall recommendation: only techniques that add cost (LLM, rerank or index-time context calls) must clear minImprovement
+    const extraCost = (llmCalls[best.technique] ?? 0) > (llmCalls.baseline ?? 0) || usesRerank(best.technique) || usesContextual(best.technique);
     if (baseline && best.technique !== "baseline" && extraCost && best.hitRate - baseline.hitRate < minImprovement) best = baseline;
     byCategory[category] = { ...best, baselineHitRate: baseline ? baseline.hitRate : null, samples: qs.length };
   }
@@ -137,10 +137,11 @@ async function route(ctx, query, options = {}) {
 /**
  * pipelineTechniques
  * Eval technique name -> ragPipeline techniques ("baseline" means none,
- * "hybrid" and "rerank" are pipeline options rather than techniques)
+ * "hybrid" and "rerank" are pipeline options rather than techniques, and
+ * "contextual" is how the vector store was indexed)
  */
 function pipelineTechniques(technique) {
-  return parseTechnique(technique).filter((t) => t !== "baseline" && t !== "hybrid" && t !== "rerank");
+  return parseTechnique(technique).filter((t) => !["baseline", "hybrid", "rerank", "contextual"].includes(t));
 }
 
-module.exports = { route, learnFromEval, classifyWithLLM, pipelineTechniques, usesHybrid, usesRerank };
+module.exports = { route, learnFromEval, classifyWithLLM, pipelineTechniques, usesHybrid, usesRerank, usesContextual };

@@ -5,13 +5,13 @@
 // created default instance (OpenAI, key from OPENAI_API_KEY).
 const { createRagforge } = require("./src/createRagforge");
 const { createOpenAIProvider, createOllamaProvider, createAnthropicProvider, createGeminiProvider, createMistralProvider, createCohereProvider, createLocalProvider } = require("./src/providers");
-const { createMemoryCache } = require("./src/core/cache");
+const { createMemoryCache, createFileCache } = require("./src/core/cache");
 const { createLLMReranker, createCohereReranker, createJinaReranker } = require("./src/rerankers");
 const { DEFAULT_PRICING } = require("./src/core/pricing");
 const { rrf } = require("./src/techniques/rrf");
 const { createMemoryVectorStore } = require("./src/eval/memoryVectorStore");
 const { createBM25Index } = require("./src/eval/bm25");
-const { chunkText } = require("./src/eval/chunk");
+const { chunkText, chunkDocuments, CHUNK_STRATEGIES } = require("./src/eval/chunk");
 const { loadDocuments, htmlToText } = require("./src/loaders");
 const { formatTable, renderHtmlReport } = require("./src/eval/report");
 const { compareEvals, formatComparison, renderMarkdownReport } = require("./src/eval/compare");
@@ -19,6 +19,9 @@ const { JUDGE_VERSION } = require("./src/eval/judge");
 const { createTraceLogger, readTraces } = require("./src/core/trace");
 const { classifyQuery, DEFAULT_RULES } = require("./src/router/classify");
 const { startMcpServer } = require("./src/mcp/server");
+const { loadConfig } = require("./src/tune/config");
+const { formatTuneTable, renderTuneHtml } = require("./src/tune/report");
+const { startUiServer } = require("./src/ui/server");
 
 let defaultInstance = null;
 const getDefault = () => (defaultInstance ??= createRagforge());
@@ -34,6 +37,7 @@ module.exports = {
   createCohereProvider,
   createLocalProvider,
   createMemoryCache,
+  createFileCache,
   createLLMReranker,
   createCohereReranker,
   createJinaReranker,
@@ -42,6 +46,8 @@ module.exports = {
   loadDocuments,
   htmlToText,
   chunkText,
+  chunkDocuments,
+  CHUNK_STRATEGIES,
   formatTable,
   renderHtmlReport,
   renderMarkdownReport,
@@ -54,6 +60,10 @@ module.exports = {
   createTraceLogger,
   readTraces,
   startMcpServer,
+  loadConfig,
+  formatTuneTable,
+  renderTuneHtml,
+  startUiServer,
 
   // v1 API (default instance)
   hyde: (query, options) => getDefault().hyde(query, options),

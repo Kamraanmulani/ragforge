@@ -42,12 +42,14 @@ function createBM25Index({ k1 = 1.2, b = 0.75 } = {}) {
 
   return {
     /**
-     * @param {Array<{id: string, content: string, metadata?: object}>} entries
+     * @param {Array<{id: string, content: string, indexText?: string, metadata?: object}>} entries
+     *   `indexText`, when given, is what gets searched (e.g. a contextual chunk);
+     *   results still return `content`
      */
     add(entries) {
       for (const e of entries) {
         const terms = new Map();
-        const tokens = tokenize(e.content);
+        const tokens = tokenize(e.indexText ?? e.content);
         for (const t of tokens) terms.set(t, (terms.get(t) ?? 0) + 1);
         for (const t of terms.keys()) docFreq.set(t, (docFreq.get(t) ?? 0) + 1);
         totalLength += tokens.length;

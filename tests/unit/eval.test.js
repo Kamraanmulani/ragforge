@@ -65,8 +65,8 @@ describe('chunkText', () => {
 describe('chunkDocuments', () => {
   const { chunkDocuments } = require('../../src/eval/chunk');
 
-  test('makes repeated document ids unique', () => {
-    const chunks = chunkDocuments([
+  test('makes repeated document ids unique', async () => {
+    const chunks = await chunkDocuments([
       { id: 'README.md', content: 'first' },
       { id: 'README.md', content: 'second' },
       'third',

@@ -39,6 +39,9 @@ coverage/
 
 # Optional eslint cache
 .eslintcache
+
+# ragforge caches (contextual retrieval context lines)
+.ragforge/
 # Demo video project (demo/): dependencies, render cache, intermediates
 demo/node_modules/
 demo/.remotion/

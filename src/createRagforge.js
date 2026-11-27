@@ -1,6 +1,6 @@
 // Factory for configured ragforge instances
 const defaults = require("./config/defaults");
-const { resolveProvider } = require("./providers");
+const { resolveProvider, createBuiltInProvider } = require("./providers");
 const { resolveCache } = require("./core/cache");
 const { resolveReranker } = require("./rerankers");
 const { DEFAULT_PRICING } = require("./core/pricing");
@@ -15,7 +15,14 @@ const { rrf } = require("./techniques/rrf");
 const { translate } = require("./pipeline/queryTranslator");
 const { ragPipeline } = require("./pipeline/ragPipeline");
 const { evaluate } = require("./eval/evaluate");
-const { route, pipelineTechniques, usesHybrid, usesRerank } = require("./router/route");
+const { route, pipelineTechniques, usesHybrid, usesRerank, usesContextual } = require("./router/route");
+const { parseTechnique } = require("./eval/evaluate");
+const { contextualize, estimateContextCost } = require("./indexing/contextual");
+const { indexDocuments } = require("./indexing/memoryIndex");
+const { syncIndex, loadIndex, embeddingsId } = require("./indexing/persistentIndex");
+const { classifyQuery } = require("./router/classify");
+const { loadConfig } = require("./tune/config");
+const { tune } = require("./tune/tune");
 
 /**
  * createRagforge
@@ -33,18 +40,32 @@ const { route, pipelineTechniques, usesHybrid, usesRerank } = require("./router/
  * @param {object} [options.logger] - Custom { info, error } logger
  * @param {function|string} [options.onTrace] - Called with a trace of every auto() and ragPipeline() call
  *   (query, route, sources, answer, stats). A file path appends the traces to that file as JSONL
+ * @param {string|object} [options.config] - A ragforge.config.json from `ragforge tune` (object or path).
+ *   Sets the providers, models, technique, topK and how rf.index() chunks; inline options win
  */
 function createRagforge(options = {}) {
-  const llm = resolveProvider(options.llm ?? "openai");
-  const embedder = options.embeddings ? resolveProvider(options.embeddings) : llm;
+  const tuned = options.config ? Object.freeze(loadConfig(options.config)) : null;
+  const fromConfig = (kind, name, opts) => {
+    try {
+      return createBuiltInProvider(name, opts);
+    } catch (err) {
+      throw new Error(`${err.message} The config's ${kind} is "${name}": pass ${kind} to createRagforge to use your own provider.`);
+    }
+  };
+  const llm = resolveProvider(options.llm ?? (tuned?.llm ? fromConfig("llm", tuned.llm, tuned.chatModel ? { chatModel: tuned.chatModel } : {}) : "openai"));
+  const embedder = options.embeddings
+    ? resolveProvider(options.embeddings)
+    : tuned?.embeddings
+      ? fromConfig("embeddings", tuned.embeddings, tuned.embeddingModel ? { embeddingModel: tuned.embeddingModel } : {})
+      : llm;
 
   const config = {
     llm,
     embedder,
     vectorStore: options.vectorStore ?? null,
-    hybrid: options.hybrid ?? false,
-    reranker: resolveReranker(options.reranker),
-    rerank: options.rerank ?? false,
+    hybrid: options.hybrid ?? tuned?.hybrid ?? false,
+    reranker: resolveReranker(options.reranker ?? tuned?.reranker ?? undefined),
+    rerank: options.rerank ?? tuned?.rerank ?? false,
     cache: resolveCache(options.cache),
     logger: resolveLogger(options.logger, options.debug),
     pricing: { ...DEFAULT_PRICING, ...options.pricing },
@@ -71,6 +92,55 @@ function createRagforge(options = {}) {
     return result;
   }
 
+  // With a tuned config, every query uses the tuned technique unless the call asks to route
+  function configRoute(query, opts) {
+    if (!tuned || opts.from || opts.router || opts.rules || opts.techniques) return null;
+    const t = tuned.tuned;
+    const score = t && typeof t.hitRate === "number" ? ` It found the right chunk ${Math.round(t.hitRate * 100)}% of the time on ${t.questions} questions${t.default ? ` vs ${Math.round(t.default.hitRate * 100)}% for the default setup` : ""}.` : "";
+    return {
+      technique: tuned.technique,
+      category: classifyQuery(query).category,
+      classifier: "config",
+      decidedBy: "config",
+      reason: `Tuned with ragforge tune: ${tuned.technique} on ${tuned.chunking.strategy} chunks of ${tuned.chunking.size} characters.${score}`,
+    };
+  }
+
+  // Defaults from the tuned config for ragPipeline and auto: topK, and the technique's query rewriting
+  const pipelineDefaults = (opts) => ({
+    ...(tuned && { topK: tuned.topK, techniques: pipelineTechniques(tuned.technique) }),
+    ...opts,
+  });
+
+  // The technique for a query and the pipeline options that run it, shared by auto() and retrieve()
+  async function routeFor(ctx, query, opts) {
+    // `technique` pins one technique (framework adapters use it); otherwise the config or the router decides
+    let chosen;
+    if (opts.technique) {
+      parseTechnique(opts.technique);
+      chosen = { technique: opts.technique, category: classifyQuery(query).category, classifier: "option", decidedBy: "option", reason: `The technique option set ${opts.technique}.` };
+    } else {
+      chosen = configRoute(query, opts) ?? (await route(ctx, query, opts));
+    }
+    let hybrid = opts.hybrid ?? (config.hybrid || usesHybrid(chosen.technique));
+    // An eval-picked hybrid technique degrades to vector search on a store without keyword search
+    if (hybrid && opts.hybrid === undefined && !config.hybrid && !ctx.hasTextSearch()) {
+      hybrid = false;
+      chosen.reason += " Keyword search was skipped because the vector store has no searchText().";
+    }
+    let rerank = opts.rerank ?? (config.rerank || usesRerank(chosen.technique));
+    if (rerank && opts.rerank === undefined && !config.rerank && !ctx.hasReranker()) {
+      rerank = false;
+      chosen.reason += " Reranking was skipped because no reranker is configured.";
+    }
+    // Contextual retrieval happens when the store is indexed; nothing changes at query time.
+    // A tuned instance indexes that way itself in rf.index()
+    if (usesContextual(chosen.technique) && chosen.decidedBy !== "config") {
+      chosen.reason += " Contextual retrieval applies to how the vector store is indexed: build it from rf.contextualize() chunks.";
+    }
+    return { chosen, pipeline: { ...pipelineDefaults(opts), hybrid, rerank, techniques: pipelineTechniques(chosen.technique) } };
+  }
+
   // Adds stats to a pipeline result and traces the call. For a stream, both happen after the last token.
   function withStats(ctx, result, callOptions, type) {
     if (!result.stream) {
@@ -88,7 +158,7 @@ function createRagforge(options = {}) {
     return { ...result, stats };
   }
 
-  return {
+  const rf = {
     hyde: (query, opts = {}) => run((ctx) => hyde(ctx, query, opts), opts),
     cot: (query, opts = {}) => run((ctx) => cot(ctx, query, opts), opts),
     stepback: (query, opts = {}) => run((ctx) => stepback(ctx, query, opts), opts),
@@ -97,34 +167,96 @@ function createRagforge(options = {}) {
 
     ragPipeline: (query, opts = {}) =>
       run(async (ctx) => {
-        const result = await ragPipeline(ctx, query, { hybrid: config.hybrid, rerank: config.rerank, ...opts });
+        const result = await ragPipeline(ctx, query, { hybrid: config.hybrid, rerank: config.rerank, ...pipelineDefaults(opts) });
         return withStats(ctx, result, opts, "ragPipeline");
       }, opts),
 
     // Picks a technique for the query without running it; see src/router/route.js
-    route: (query, opts = {}) => run((ctx) => route(ctx, query, opts), opts),
+    route: (query, opts = {}) => run(async (ctx) => configRoute(query, opts) ?? route(ctx, query, opts), opts),
 
     // Routes the query, then runs the pipeline with the chosen technique
     auto: (query, opts = {}) =>
       run(async (ctx) => {
-        const chosen = await route(ctx, query, opts);
-        let hybrid = opts.hybrid ?? (config.hybrid || usesHybrid(chosen.technique));
-        // An eval-picked hybrid technique degrades to vector search on a store without keyword search
-        if (hybrid && opts.hybrid === undefined && !config.hybrid && !ctx.hasTextSearch()) {
-          hybrid = false;
-          chosen.reason += " Keyword search was skipped because the vector store has no searchText().";
-        }
-        let rerank = opts.rerank ?? (config.rerank || usesRerank(chosen.technique));
-        if (rerank && opts.rerank === undefined && !config.rerank && !ctx.hasReranker()) {
-          rerank = false;
-          chosen.reason += " Reranking was skipped because no reranker is configured.";
-        }
-        const result = await ragPipeline(ctx, query, { ...opts, hybrid, rerank, techniques: pipelineTechniques(chosen.technique) });
+        const { chosen, pipeline } = await routeFor(ctx, query, opts);
+        const result = await ragPipeline(ctx, query, pipeline);
         return withStats(ctx, { ...result, route: chosen }, opts, "auto");
+      }, opts),
+
+    /**
+     * retrieve
+     * Routes the query and retrieves passages like auto(), but writes no answer:
+     * for frameworks (LangChain, AI SDK, LlamaIndex, Mastra) that generate it themselves.
+     * @returns {Promise<{ query, sources, route, translation, retrieved, stats }>}
+     */
+    retrieve: (query, opts = {}) =>
+      run(async (ctx) => {
+        const { chosen, pipeline } = await routeFor(ctx, query, { ...opts, stream: false });
+        const result = await ragPipeline(ctx, query, { ...pipeline, answer: false });
+        return withStats(ctx, { ...result, route: chosen }, opts, "retrieve");
       }, opts),
 
     // Benchmarks retrieval techniques; see src/eval/evaluate.js for options
     evaluate: (opts = {}) => evaluate(config, opts),
+
+    // Contextual retrieval: adds an LLM-written context line to each chunk, for indexing.
+    // See src/indexing/contextual.js for options
+    contextualize: async (chunks, documents, opts = {}) => {
+      const ctx = createCallContext(config);
+      const result = await contextualize(ctx, config, chunks, documents, opts);
+      return { ...result, stats: ctx.tracker.snapshot() };
+    },
+    estimateContextCost: (chunks, documents, opts = {}) => estimateContextCost(config, chunks, documents, opts),
+
+    // Finds the best retrieval setup for your documents within a budget; see src/tune/tune.js
+    tune: (opts = {}) => tune(config, opts),
+
+    /**
+     * index
+     * Chunks and embeds documents into an in-memory store (vectors + BM25) and uses it.
+     * With a tuned config, chunking and contextual retrieval follow the config.
+     */
+    index: async (documents, opts = {}) => {
+      const o = {
+        ...(tuned && {
+          chunkStrategy: tuned.chunking.strategy,
+          chunkSize: tuned.chunking.size,
+          chunkOverlap: tuned.chunking.overlap,
+          contextual: tuned.contextual,
+        }),
+        ...opts,
+      };
+      if (!o.dir) return indexDocuments(rf, documents, o);
+
+      // Saved and incremental: only new and edited documents are chunked and embedded again
+      const ctx = createCallContext(config);
+      const contextOptions = o.contextOptions ?? {};
+      const result = await syncIndex({
+        documents,
+        dir: o.dir,
+        chunking: { strategy: o.chunkStrategy, size: o.chunkSize, overlap: o.chunkOverlap },
+        embed: (text) => ctx.embed(text),
+        embeddings: embeddingsId(embedder),
+        contextualize: o.contextual
+          ? (chunks, docs) => contextualize(ctx, config, chunks, docs, { concurrency: o.concurrency, ...contextOptions })
+          : null,
+        contextual: o.contextual ? contextOptions.model ?? config.defaults.model ?? llm.chatModel : null,
+        concurrency: o.concurrency ?? 4,
+        onProgress: o.onProgress,
+      });
+      config.vectorStore = result.store;
+      return { ...result, count: result.entries.length, contextual: result.context, stats: ctx.tracker.snapshot() };
+    },
+
+    /**
+     * loadIndex
+     * Uses an index saved by rf.index(documents, { dir }) or `ragforge index`, without
+     * reading the documents. Its embedding model must match this instance's.
+     */
+    loadIndex: (dir) => {
+      const loaded = loadIndex(dir, { embeddings: embeddingsId(embedder) });
+      config.vectorStore = loaded.store;
+      return { count: loaded.entries.length, store: loaded.store, manifest: loaded.manifest };
+    },
 
     callLLM: (prompt, opts = {}) => run((ctx) => ctx.chat(prompt, opts), opts),
     getEmbedding: (text, opts = {}) => run((ctx) => ctx.embed(text, opts.model), opts),
@@ -138,7 +270,10 @@ function createRagforge(options = {}) {
     llm,
     embedder,
     cache: config.cache,
+    // The tuned config this instance was created with, or null
+    config: tuned,
   };
+  return rf;
 }
 
 module.exports = { createRagforge };

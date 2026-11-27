@@ -132,6 +132,12 @@ export interface RagforgeOptions {
    * A hook that throws is logged and never fails the call.
    */
   onTrace?: ((trace: Trace) => void) | string;
+  /**
+   * The setup `ragforge tune` picked: a ragforge.config.json object or its path. Sets the
+   * providers and models, the technique auto() uses, topK, and how rf.index() chunks.
+   * Options passed here win over the config.
+   */
+  config?: TunedConfig | string;
 }
 
 /** One auto() or ragPipeline() call: what was asked, how it was routed, what the answer was written from */
@@ -211,7 +217,7 @@ export interface PipelineResult {
   stats: Stats;
 }
 
-export type EvalTechnique = "baseline" | "hybrid" | "rerank" | Technique | (string & {});
+export type EvalTechnique = "baseline" | "hybrid" | "rerank" | "contextual" | Technique | (string & {});
 
 export interface EvalQuestion {
   question: string;
@@ -236,7 +242,12 @@ export interface EvaluateOptions {
   topK?: number;
   /** Candidates retrieved for rerank techniques (default 20) */
   rerankCandidates?: number;
+  /** Max characters per chunk (default 800) */
   chunkSize?: number;
+  /** How `documents` are split (default "paragraph"). "semantic" makes one embedding call per sentence */
+  chunkStrategy?: ChunkStrategy;
+  /** Characters repeated between chunks, "fixed" and "sentence" only (default 0) */
+  chunkOverlap?: number;
   concurrency?: number;
   /** Hit-rate gain over baseline needed to recommend a technique (default 0.05) */
   minImprovement?: number;
@@ -248,7 +259,102 @@ export interface EvaluateOptions {
   answers?: boolean;
   /** LLM options for the judge, e.g. { model: "gpt-4o" } (default: llmOptions, at temperature 0) */
   judgeOptions?: LLMOptions;
-  onProgress?: (progress: { phase: "index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
+  /** Add "contextual" and "contextual+hybrid" to the default techniques */
+  contextual?: boolean;
+  /** For contextual techniques: the model, cache, budget and document window for context lines */
+  contextOptions?: ContextOptions;
+  /**
+   * Your own retrievers to score next to the techniques, e.g. { langchain: fromLangChainRetriever(r) }.
+   * Matched on passage text (they use their own index), never recommended
+   */
+  retrievers?: Record<string, ExternalRetriever>;
+  onProgress?: (progress: { phase: "index" | "context" | "context-index" | "questions" | "run" | "answers"; done: number; total: number }) => void;
+}
+
+export interface ContextOptions {
+  /** Chat model that writes the context lines (default: the instance's) */
+  model?: string;
+  llmOptions?: LLMOptions;
+  /** Keeps context lines between runs, e.g. createFileCache(".ragforge/context-cache.json") */
+  cache?: Cache;
+  /** Refuse to start when the estimated cost is higher (USD) */
+  budgetUSD?: number;
+  /** Document text shown with each chunk; longer documents are cut to a window around it (default 24000) */
+  maxDocumentChars?: number;
+  /** Parallel LLM calls (default 4) */
+  concurrency?: number;
+  /** Called with the estimate before any LLM call */
+  onEstimate?: (estimate: ContextEstimate) => void;
+  onProgress?: (progress: { phase: "context"; done: number; total: number }) => void;
+}
+
+export interface ContextEstimate {
+  chunks: number;
+  /** Chunks whose context line is already in the cache */
+  cached: number;
+  /** LLM calls still to make */
+  calls: number;
+  /** Estimated from characters, about 4 per token */
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+  /** null when the model has no known price (add it with `pricing`); 0 for free providers */
+  costUSD: number | null;
+}
+
+export interface ContextualChunk extends Chunk {
+  /** The LLM-written line that places the chunk in its document ("" when its call failed) */
+  context: string;
+  /** context + chunk: the text to embed and keyword-index. Show `content` to users */
+  indexText: string;
+}
+
+export interface ContextualizeResult {
+  chunks: ContextualChunk[];
+  estimate: ContextEstimate;
+  /** Context lines taken from the cache */
+  cached: number;
+  /** Chunks whose call failed; they are indexed without context */
+  failed: number;
+  errors: Array<{ id: string; error: string }>;
+  stats: Stats;
+}
+
+/**
+ * How documents are split into chunks:
+ * - paragraph: packs whole paragraphs (default)
+ * - fixed: windows of characters cut at a word, with optional overlap
+ * - sentence: packs whole sentences, with optional overlap
+ * - markdown-heading: one section per chunk, starting with its heading trail ("Setup > Windows")
+ * - semantic: sentences, split where the topic shifts (needs embeddings)
+ * - code: source files split by top-level declaration; other documents by paragraph
+ */
+export type ChunkStrategy = "paragraph" | "fixed" | "sentence" | "markdown-heading" | "semantic" | "code";
+
+export interface ChunkOptions {
+  /** Max characters per chunk (default 800) */
+  size?: number;
+  strategy?: ChunkStrategy;
+  /** Characters repeated between chunks, "fixed" and "sentence" only (default 0) */
+  overlap?: number;
+}
+
+export interface ChunkDocumentsOptions extends ChunkOptions {
+  /** Embeds one text; needed for "semantic" */
+  embed?: (text: string) => Promise<number[]>;
+  /** semantic: percentile of drops in similarity between sentences that start a new chunk, 0 to 1 (default 0.9) */
+  breakpoint?: number;
+  /** semantic: parallel embedding calls (default 4) */
+  concurrency?: number;
+}
+
+export interface Chunk {
+  /** "<docId>#<n>", counting from 1 */
+  id: string;
+  docId: string;
+  content: string;
+  /** markdown-heading: the heading trail that `content` starts with, e.g. "Setup > Windows" */
+  heading?: string;
 }
 
 /** Answer-quality scores from 0 to 1. null when a metric could not be scored */
@@ -283,6 +389,8 @@ export interface EvalRow {
   errors: number;
   /** Answer quality, when the eval ran with `answers`. Cost and latency above cover retrieval only */
   answers?: EvalAnswerSummary;
+  /** Your own retriever (evaluate({ retrievers })): matched on text, cost not tracked, never recommended */
+  external?: boolean;
 }
 
 export interface EvalRun {
@@ -304,6 +412,21 @@ export interface EvalResult {
   topK: number;
   questionCount: number;
   chunkCount: number | null;
+  /** How the documents were split. null when evaluating your own vector store */
+  chunking?: { strategy: ChunkStrategy; size: number; overlap: number } | null;
+  /** Names of your own retrievers that were scored (evaluate({ retrievers })) */
+  retrievers?: string[];
+  /** Present when contextual techniques ran: what writing and indexing the context lines cost, once */
+  contextual?: {
+    model: string;
+    chunks: number;
+    /** Chunks that got a context line */
+    contextualized: number;
+    cached: number;
+    failed: number;
+    estimate: ContextEstimate;
+    usage: Stats;
+  };
   techniques: string[];
   provider: { llm: string; chatModel: string; embeddings: string; embeddingModel: string };
   /** Usage for indexing and question generation */
@@ -361,12 +484,31 @@ export interface RouteOptions extends CallOptions {
 export interface Route {
   technique: string;
   category: QueryCategory;
-  classifier: "rules" | "llm";
-  decidedBy: "rules" | "eval";
+  classifier: "rules" | "llm" | "config" | "option";
+  /** "config": the technique from a tuned config (createRagforge({ config })). "option": the `technique` option */
+  decidedBy: "rules" | "eval" | "config" | "option";
   reason: string;
 }
 
+export interface RetrieveResult {
+  query: string;
+  /** Numbered passages, best first */
+  sources: Source[];
+  route: Route;
+  translation: Translation;
+  retrieved: string[];
+  stats: Stats;
+}
+
+/** Your own retriever, for evaluate({ retrievers }): returns passages for a query */
+export type ExternalRetriever = (
+  query: string,
+  topK: number
+) => Promise<Array<string | { id?: string | null; content?: string; pageContent?: string; text?: string; score?: number | null; metadata?: Record<string, unknown> | null }>>;
+
 export interface AutoOptions extends RouteOptions {
+  /** Always use this technique (e.g. "hybrid" or "hybrid+hyde") instead of routing */
+  technique?: EvalTechnique;
   topK?: number;
   rerankK?: number;
   /** Force keyword search on or off; by default it follows the routed technique */
@@ -404,8 +546,20 @@ export interface Ragforge {
   /** Pick a technique for the query, then run the pipeline with it */
   auto(query: string, options: AutoOptions & { stream: true }): Promise<StreamingAutoResult>;
   auto(query: string, options?: AutoOptions): Promise<AutoResult>;
+  /**
+   * Route and retrieve like auto(), without writing an answer: for frameworks that generate
+   * it themselves (see ragforge/langchain, ragforge/ai-sdk, ragforge/llamaindex, ragforge/mastra)
+   */
+  retrieve(query: string, options?: Omit<AutoOptions, "citations" | "finalModelOptions">): Promise<RetrieveResult>;
   /** Benchmark retrieval techniques on your data and get a recommendation */
   evaluate(options: EvaluateOptions): Promise<EvalResult>;
+  /**
+   * Contextual retrieval: an LLM writes a line placing each chunk in its document.
+   * Embed and keyword-index `indexText`; show `content`. Pass the documents the chunks came from.
+   */
+  contextualize(chunks: Chunk[], documents: Array<string | { id?: string; content: string }>, options?: ContextOptions): Promise<ContextualizeResult>;
+  /** What contextualize() would cost, without calling the LLM */
+  estimateContextCost(chunks: Chunk[], documents: Array<string | { id?: string; content: string }>, options?: ContextOptions): Promise<ContextEstimate>;
   hyde(query: string, options?: CallOptions): Promise<string>;
   cot(query: string, options?: CallOptions): Promise<CotResult>;
   stepback(query: string, options?: CallOptions): Promise<StepbackResult>;
@@ -419,6 +573,22 @@ export interface Ragforge {
   readonly llm: Provider;
   readonly embedder: Provider;
   readonly cache: Cache | null;
+  /** Find the best retrieval setup for your documents within a budget */
+  tune(options: TuneOptions): Promise<TuneResult>;
+  /**
+   * Chunk and embed documents into an in-memory store (vectors + BM25) and use it.
+   * With a tuned config, chunking and contextual retrieval follow the config.
+   * With `dir`, the index is saved there and later calls only redo what changed.
+   */
+  index(documents: Array<string | { id?: string; content: string }>, options: IndexOptions & { dir: string }): Promise<SyncResult>;
+  index(
+    documents: Array<string | { id?: string; content: string }>,
+    options?: IndexOptions
+  ): Promise<{ count: number; contextual: ContextualizeResult | null; store: MemoryVectorStore }>;
+  /** Use an index saved with index(documents, { dir }) or `ragforge index`, without the documents */
+  loadIndex(dir: string): { count: number; store: MemoryVectorStore; manifest: IndexManifest };
+  /** The tuned config this instance was created with, or null */
+  readonly config: TunedConfig | null;
 }
 
 export function createRagforge(options?: RagforgeOptions): Ragforge;
@@ -446,6 +616,17 @@ export function createOllamaProvider(options?: {
 
 export function createMemoryCache(options?: { maxEntries?: number }): MemoryCache;
 
+export interface FileCache extends Cache {
+  readonly file: string;
+  /** Save pending writes now (they are also saved shortly after each write, and at exit) */
+  flush(): Promise<void>;
+  clear(): void;
+  readonly size: number;
+}
+
+/** A cache kept in a JSON file, so entries survive between runs */
+export function createFileCache(file: string, options?: { flushMs?: number }): FileCache;
+
 export function createLLMReranker(options?: { maxChars?: number; llmOptions?: LLMOptions }): Reranker;
 export function createCohereReranker(options?: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }): Reranker;
 export function createJinaReranker(options?: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }): Reranker;
@@ -455,13 +636,84 @@ export function createMemoryVectorStore(): MemoryVectorStore;
 /** Zero-dependency BM25 keyword index, e.g. to add searchText() to your own store */
 export function createBM25Index(options?: { k1?: number; b?: number }): BM25Index;
 
-export function chunkText(text: string, options?: { size?: number }): string[];
+/** Splits one text. Every strategy but "semantic", which needs chunkDocuments() with `embed` */
+export function chunkText(text: string, options?: ChunkOptions): string[];
+
+/** Splits documents into chunks with ids "<docId>#<n>". Repeated document ids get a "~2" suffix */
+export function chunkDocuments(
+  documents: Array<string | { id?: string; content: string }>,
+  options?: ChunkDocumentsOptions
+): Promise<Chunk[]>;
+
+export const CHUNK_STRATEGIES: ChunkStrategy[];
+
+export interface IndexOptions {
+  /** Save the index here and keep it up to date on later calls (e.g. ".ragforge/index") */
+  dir?: string;
+  chunkSize?: number;
+  chunkStrategy?: ChunkStrategy;
+  chunkOverlap?: number;
+  contextual?: boolean;
+  contextOptions?: ContextOptions;
+  concurrency?: number;
+  onProgress?: (p: { phase: "context" | "index" | "embed"; done: number; total: number }) => void;
+}
+
+/** What rf.index(documents, { dir }) changed */
+export interface SyncResult {
+  dir: string;
+  count: number;
+  store: MemoryVectorStore;
+  entries: Array<{ id: string; docId: string; content: string; indexText?: string; context?: string; heading?: string; vector: number[] }>;
+  /** Document ids, by what happened to them */
+  changes: { added: string[]; updated: string[]; removed: string[]; unchanged: number };
+  /** Chunks embedded in this call */
+  embedded: number;
+  /** Chunks of edited documents whose text (and vector) didn't change */
+  reused: number;
+  /** Why everything was redone ("chunk size 800 → 400"), or null */
+  rebuilt: string | null;
+  /** Why a damaged saved index was rebuilt, or null */
+  problem: string | null;
+  /** false when nothing changed and nothing was written */
+  saved: boolean;
+  contextual: ContextualizeResult | null;
+  context: ContextualizeResult | null;
+  manifest: IndexManifest;
+  stats: Stats;
+}
+
+/** manifest.json of a saved index */
+export interface IndexManifest {
+  version: 1;
+  generation: string;
+  ragforge: string;
+  savedAt: string;
+  settings: { chunking: { strategy: ChunkStrategy; size: number; overlap: number }; embeddings: string | null; contextual: string | null };
+  chunkCount: number;
+  documents: Record<string, { hash: string; chunks: string[]; source?: string }>;
+}
 
 export interface McpServerOptions {
   /** Documents from loadDocuments() */
   documents: Array<{ id: string; content: string }>;
+  /** Passages per search_docs / ask call when the agent doesn't say (default 5) */
+  topK?: number;
+  /** A tuned config: `ask` answers with its technique */
+  config?: TunedConfig | string;
+  /** Keep a saved index here and bring it up to date at startup */
+  indexDir?: string;
+  /** Re-read the documents with load() and update the index when a file in sources changes */
+  watch?: { sources: string[]; cwd?: string; load: () => Promise<Array<{ id: string; content: string }>> } | null;
   /** Max characters per passage (default 800) */
   chunkSize?: number;
+  /** How documents are split (default "paragraph"). "semantic" needs an embedder */
+  chunkStrategy?: ChunkStrategy;
+  /** Characters repeated between passages, "fixed" and "sentence" only (default 0) */
+  chunkOverlap?: number;
+  /** Give each passage an LLM-written context line before indexing (needs llm) */
+  contextual?: boolean;
+  contextOptions?: ContextOptions;
   /** Parallel embedding requests while indexing (default 4) */
   concurrency?: number;
   /** Embedding provider for vector search. Omit for keyword search only (no key). */
@@ -489,7 +741,13 @@ export interface LoadedDocument {
  */
 export function loadDocuments(
   sources: string | string[],
-  options?: { cwd?: string; concurrency?: number; fetch?: typeof fetch }
+  options?: {
+    cwd?: string;
+    concurrency?: number;
+    fetch?: typeof fetch;
+    /** Also read source code files from folders, for the "code" chunking strategy */
+    code?: boolean;
+  }
 ): Promise<LoadedDocument[]>;
 
 /** Readable text from an HTML page, keeping headings, paragraphs and list items */
@@ -497,6 +755,167 @@ export function htmlToText(html: string): string;
 
 /** Plain-text scoreboard for an evaluate() result */
 export function formatTable(result: EvalResult): string;
+
+/** The setup ragforge tune picked, as written to ragforge.config.json */
+export interface TunedConfig {
+  version: 1;
+  /** Built-in provider name for chat (e.g. "openai") */
+  llm?: string;
+  chatModel?: string;
+  /** Built-in provider name for embeddings */
+  embeddings?: string;
+  embeddingModel?: string;
+  chunking: { strategy: ChunkStrategy; size: number; overlap: number };
+  /** Index with context lines (rf.index does) */
+  contextual: boolean;
+  /** The eval technique to use for every query, e.g. "hybrid" or "hybrid+hyde" */
+  technique: string;
+  hybrid: boolean;
+  rerank: boolean;
+  reranker: string | null;
+  topK: number;
+  /** How the setup scored when it was tuned */
+  tuned?: {
+    at: string;
+    ragforge: string;
+    questions: number;
+    hitRate: number;
+    mrr: number;
+    avgCostUSD: number | null;
+    indexCostUSD: number | null;
+    default: { hitRate: number; mrr: number } | null;
+    reason: string;
+  };
+}
+
+export interface TuneOptions {
+  documents: Array<string | { id?: string; content: string }>;
+  /** Ground truth matched by text (chunk ids change with the chunking). Generated when omitted */
+  questions?: Array<{ question: string; expectedText?: string; source?: string; expectedAnswer?: string }>;
+  /** Questions to generate (default 20) */
+  numQuestions?: number;
+  questionStyles?: Array<"question" | "keywords" | "conceptual">;
+  /** Default ["paragraph", "markdown-heading", "sentence"] */
+  chunkStrategies?: ChunkStrategy[];
+  /** Default [400, 800, 1200] */
+  chunkSizes?: number[];
+  /** Default: the embedder's model, plus text-embedding-3-small with OpenAI */
+  embeddingModels?: string[];
+  /** Techniques tried on the best setups (every setup gets baseline and hybrid) */
+  techniques?: EvalTechnique[];
+  /** Also try contextual retrieval on the best setups */
+  contextual?: boolean;
+  contextOptions?: ContextOptions;
+  /** Setups that get the costlier techniques (default 3) */
+  topSetups?: number;
+  /** Most the run may spend, in USD (default 0.5). null for no limit */
+  budgetUSD?: number | null;
+  topK?: number;
+  rerankCandidates?: number;
+  /** Gain a costlier technique needs over the best free one (default 0.05) */
+  minImprovement?: number;
+  /**
+   * To replace what it competes with (the default setup, or the best free trial), a trial must
+   * rank the right chunk higher on this many more questions than it ranks it lower (default 2)
+   */
+  minGainQuestions?: number;
+  concurrency?: number;
+  llmOptions?: LLMOptions;
+  /** Called with the plan and its cost estimate before anything is spent */
+  onPlan?: (plan: TunePlan) => void;
+  onProgress?: (progress: { phase: "questions" | "screen" | "refine"; step?: number; steps?: number; setup?: string; detail?: string; done: number; total: number }) => void;
+}
+
+export interface TunePlan {
+  setups: number;
+  chunkStrategies: ChunkStrategy[];
+  chunkSizes: number[];
+  embeddingModels: string[];
+  screenTechniques: string[];
+  refineTechniques: string[];
+  topSetups: number;
+  questions: number;
+  generateQuestions: boolean;
+  budgetUSD: number | null;
+  /** USD; null when a price is unknown */
+  estimate: { questions: number | null; screening: number | null; refining: number | null; total: number | null };
+}
+
+/** One index setup with one technique */
+export interface TuneTrial {
+  /** "<strategy>/<size>/<embedding model> <technique>" */
+  id: string;
+  setupId: string;
+  setup: { chunkStrategy: ChunkStrategy; chunkSize: number; embeddingModel: string };
+  /** The default setup's baseline: what you'd get without tuning */
+  isDefault: boolean;
+  technique: string;
+  stage: "screen" | "refine";
+  hitRate: number;
+  mrr: number;
+  avgCostUSD: number | null;
+  avgLatencyMs: number;
+  avgLlmCalls: number;
+  errors: number;
+  /** Rank of the right chunk for each question, 0 when it wasn't retrieved */
+  ranks: number[];
+  chunkCount: number | null;
+  /** Average chunk length: bigger chunks send more text to the LLM with every answer */
+  avgChunkChars: number;
+  /** Paid once per index build: chunk embeddings, plus context lines for contextual */
+  indexCostUSD: number | null;
+}
+
+export interface TuneResult {
+  version: 1;
+  topK: number;
+  questionCount: number;
+  budgetUSD: number | null;
+  /** What the run really spent (repeated calls are made once) */
+  spent: Stats;
+  /** Why the search stopped before the end, or null */
+  stopped: string | null;
+  plan: TunePlan;
+  /** Trial ids */
+  best: string;
+  default: string | null;
+  reason: string;
+  /** Trials no other trial beats on both quality and cost, cheapest first */
+  pareto: string[];
+  trials: TuneTrial[];
+  /** Write this to ragforge.config.json */
+  config: TunedConfig;
+  provider: { llm: string; chatModel: string | null; embeddings: string };
+  warnings: string[];
+  questions: Array<{ question: string; expectedText: string; style?: string; source?: string }>;
+}
+
+export interface UiServerOptions {
+  /** Folder to look for eval runs, tune runs, trace logs, saved indexes and configs in, and below (default: cwd) */
+  dir?: string;
+  /** Default 4321 (the next free port if it is taken); 0 picks any free port */
+  port?: number;
+  /** Default "127.0.0.1": this computer only */
+  host?: string;
+}
+
+/** Starts the `ragforge ui` dashboard. Resolves once it is listening */
+export function startUiServer(options?: UiServerOptions): Promise<{
+  url: string;
+  port: number;
+  /** What the dashboard can show right now */
+  files(): Array<{ id: string; kind: "eval" | "tune" | "traces" | "index" | "config"; name: string; modified: string; size: number; summary: Record<string, unknown> }>;
+  close(): Promise<void>;
+}>;
+
+/** Read and check a ragforge.config.json (object or path) */
+export function loadConfig(config: TunedConfig | string, options?: { cwd?: string }): TunedConfig;
+
+/** Plain-text summary of a tune() result */
+export function formatTuneTable(result: TuneResult, options?: { rows?: number }): string;
+
+/** Self-contained HTML page with the cost/quality chart and every trial */
+export function renderTuneHtml(result: TuneResult, options?: { title?: string }): string;
 
 /** Standalone HTML report for an evaluate() result */
 export function renderHtmlReport(result: EvalResult, options?: { title?: string }): string;

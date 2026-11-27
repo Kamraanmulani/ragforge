@@ -35,7 +35,13 @@
     "llm-as-judge",
     "regression-testing",
     "github-action",
-    "rag-pipeline"
+    "rag-pipeline",
+    "langchain",
+    "ai-sdk",
+    "vercel-ai-sdk",
+    "llamaindex",
+    "mastra",
+    "retriever"
   ],
   "homepage": "https://github.com/Kamraanmulani/ragforge#readme",
   "bugs": {
@@ -69,7 +75,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit",
     "test:integration": "jest tests/integration --runInBand",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit --watch",
-    "typecheck": "tsc --noEmit --strict index.d.ts"
+    "typecheck": "tsc --noEmit --strict index.d.ts src/integrations/langchain.d.ts src/integrations/ai-sdk.d.ts src/integrations/llamaindex.d.ts src/integrations/mastra.d.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
@@ -77,11 +83,27 @@
   },
   "peerDependencies": {
     "@huggingface/transformers": ">=3.0.0",
+    "@langchain/core": ">=1.0.0",
+    "@llamaindex/core": ">=0.6.0",
+    "@mastra/core": ">=1.0.0",
+    "ai": ">=7.0.0",
     "mammoth": ">=1.6.0",
     "unpdf": ">=1.0.0"
   },
   "peerDependenciesMeta": {
     "@huggingface/transformers": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@llamaindex/core": {
+      "optional": true
+    },
+    "@mastra/core": {
+      "optional": true
+    },
+    "ai": {
       "optional": true
     },
     "mammoth": {
@@ -92,11 +114,16 @@
     }
   },
   "devDependencies": {
+    "@langchain/core": "^1.5.1",
+    "@llamaindex/core": "^0.6.22",
+    "@mastra/core": "^1.86.0",
     "@qdrant/js-client-rest": "^1.15.1",
+    "ai": "^7.0.183",
     "jest": "^30.2.0",
     "mammoth": "^1.13.0",
     "typescript": "^5.9.3",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.8.1",
+    "zod": "^4.6.7"
   },
   "exports": {
     ".": {
@@ -129,6 +156,22 @@
     "./supabase": {
       "types": "./src/stores/supabase.d.ts",
       "default": "./src/stores/supabase.js"
+    },
+    "./langchain": {
+      "types": "./src/integrations/langchain.d.ts",
+      "default": "./src/integrations/langchain.js"
+    },
+    "./ai-sdk": {
+      "types": "./src/integrations/ai-sdk.d.ts",
+      "default": "./src/integrations/ai-sdk.js"
+    },
+    "./llamaindex": {
+      "types": "./src/integrations/llamaindex.d.ts",
+      "default": "./src/integrations/llamaindex.js"
+    },
+    "./mastra": {
+      "types": "./src/integrations/mastra.d.ts",
+      "default": "./src/integrations/mastra.js"
     }
   }
 }
